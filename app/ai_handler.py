@@ -18,7 +18,7 @@ from anthropic import Anthropic
 from openai import BadRequestError, OpenAI
 import google.generativeai as genai
 
-from app import models_catalog
+from app import api_keys, models_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,8 @@ class AIHandler:
         """
         provider: str = self.config.get("api", "provider")
         model: str = self.config.get("api", "model")
-        api_key: str = self.config.get("api", "api_key")
+        # The key picked for this provider in Settings (its Primary key by default)
+        api_key: str = api_keys.active_key(self.config, provider) if provider else ""
 
         # Validate configuration before making API calls
         if not api_key:

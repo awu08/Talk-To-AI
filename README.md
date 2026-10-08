@@ -13,6 +13,7 @@ A macOS menu bar voice assistant that brings Claude, ChatGPT, or Gemini to your 
 - **Custom Shortcuts** — Click a shortcut in Settings and press the new combo to change it
 - **On-Device Transcription** — Whisper turns your speech into text right on your Mac (free, private, works offline), with Google as a backup
 - **Multi-AI Support** — Choose between Claude, ChatGPT, or Gemini
+- **Saved Keys per Provider** — Each provider remembers its own API key, so switching provider swaps the key; add extra named keys (like "Work") and pick which one to use
 - **Model Picker** — Pick a model from a list that says what each one is good at (free, fastest, deeper thinking…), or choose **Other…** to use any model ID
 - **Right-Sized Answers** — Quick questions get a sentence or two; harder ones get only as much as they need
 - **Voice Response** — Answers are read aloud with any voice installed on your Mac, at the speed you choose
@@ -48,7 +49,7 @@ Click the menu bar mic for status, to turn spoken answers or the response window
 | Section | What you can change |
 |---------|---------------------|
 | **General** | Start/stop shortcuts, spoken answers, response window, Open at login, clear chat history |
-| **AI Model** | Provider (Claude, ChatGPT, Gemini), model (from a described list, or Other… for any model ID), API key |
+| **AI Model** | Provider (Claude, ChatGPT, Gemini), model (from a described list, or Other… for any model ID), API key (one per provider, plus named extras via **Add another key…**) |
 | **Voice** | Speech recognition (Whisper or Google), Whisper accuracy, voice, speaking speed |
 
 Changes save automatically.
@@ -108,6 +109,7 @@ pip install -r requirements.txt
 3. **Configure in Settings:**
    - Click the menu bar microphone → Settings
    - Under **AI Model**, choose a provider, pick a model from the list (or **Other…** to type any model ID) and paste your API key
+   - Each provider keeps its own key. To keep a second key for the same provider (say, a work account), choose **Key → Add another key…**, name it, and paste it
    - Optionally change shortcuts (click one under General and press your new combo) and voice settings
 
 When running from source, macOS asks for Microphone and Accessibility permission for your terminal app rather than for Talk-To-AI.
@@ -139,6 +141,7 @@ Logs are saved to `~/Library/Logs/Talk-To-AI/talk-to-ai.log`.
 - **audio_handler.py** — Microphone recording and audio checks
 - **transcriber.py** — Speech-to-text: local Whisper, with Google as backup
 - **ai_handler.py** — AI API routing (Claude, ChatGPT, Gemini) and the answer-length instructions
+- **api_keys.py** — Saved API keys per provider (Primary plus named extras)
 - **models_catalog.py** — The models offered in Settings, with descriptions (edit this when providers release new models)
 - **voice_handler.py** — Interruptible text-to-speech
 - **settings_panel.py** — Settings window with sidebar sections (General, AI Model, Voice)
@@ -178,7 +181,12 @@ Settings are stored in `~/.talktoai/settings.json`:
   "api": {
     "provider": "Gemini",
     "model": "gemini-3.6-flash",
-    "api_key": "your-api-key-here"
+    "keys": {
+      "Gemini": { "Primary": "your-gemini-key" },
+      "Claude": { "Primary": "your-claude-key", "Work": "your-work-claude-key" }
+    },
+    "active_keys": { "Claude": "Work" },
+    "api_key": "your-gemini-key"
   },
   "speech": {
     "engine": "whisper",
@@ -195,7 +203,7 @@ Settings are stored in `~/.talktoai/settings.json`:
 }
 ```
 
-`api.model` is any model ID; Settings fills it in from the list. `voice_name` is empty for the system's default voice. `speech.model` can be `base.en` (fast), `small.en` (balanced) or `medium.en` (most accurate).
+`api.model` is any model ID; Settings fills it in from the list. `api.keys` holds each provider's keys by name, `api.active_keys` says which one each provider uses (Primary if not listed), and `api.api_key` mirrors the key in use. `voice_name` is empty for the system's default voice. `speech.model` can be `base.en` (fast), `small.en` (balanced) or `medium.en` (most accurate).
 
 ## API Recommendations
 

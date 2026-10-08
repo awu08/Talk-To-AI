@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
-from app import models_catalog
+from app import api_keys, models_catalog
 from app.theme import COLORS, icon, icon_pixmap, tray_icon
 from app.widgets import Card, RoundedPanel, SettingRow, ToggleSwitch, format_hotkey, label
 
@@ -154,7 +154,11 @@ class TrayPopover(RoundedPanel):
         provider = self.config.get("api", "provider") or ""
         model = self.config.get("api", "model") or ""
         self.provider_chip.setText(provider or "No AI set")
-        self.provider_chip.setToolTip(models_catalog.display_name(provider, model))
+        key_name = api_keys.active_name(self.config, provider) if provider else ""
+        tip = models_catalog.display_name(provider, model)
+        if key_name and key_name != api_keys.PRIMARY:
+            tip += f" · {key_name} key"
+        self.provider_chip.setToolTip(tip)
         self.voice_toggle.setChecked(_bool_setting(self.config.get("response_mode", "voice")))
         self.popup_toggle.setChecked(_bool_setting(self.config.get("response_mode", "popup")))
         self._syncing = False
@@ -173,7 +177,7 @@ class TrayPopover(RoundedPanel):
             self.status_dot.set_color(COLORS["orange"])
             self.status_title.setText("Listening…")
             self.status_hint.setText(f"Press {stop} to send")
-        elif not self.config.get("api", "api_key"):
+        elif not api_keys.active_key(self.config, self.config.get("api", "provider") or ""):
             self.status_dot.set_color(COLORS["text_tertiary"])
             self.status_title.setText("Add an API key to start")
             self.status_hint.setText("Open Settings → AI Model")

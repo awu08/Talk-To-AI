@@ -8,6 +8,7 @@
 - **Menu bar dropdown**: shows whether it's ready, listening, or speaking, with quick toggles, Clear conversation, Settings, and Quit.
 - **Settings window**: sidebar with General, AI Model, and Voice sections.
 - **Model picker**: choose a model from a list for each provider, with what each is good at (free, fastest, deeper thinking…). **Other…** lets you enter any model ID. If none is chosen, the provider's recommended model is used.
+- **Saved keys per provider**: each provider remembers its own API key, so switching provider swaps the key automatically. Add extra named keys (like "Work") with **Add another key…**, pick which one to use, or remove it.
 - **Record shortcuts**: click a shortcut in Settings and press the new combo.
 - **On-device speech recognition**: Whisper transcribes your speech on your Mac (free, private, offline). Choose Fast, Balanced, or Most accurate. Google remains as a backup.
 - **Right-sized answers**: quick questions get short answers; complex ones get only as much as they need.

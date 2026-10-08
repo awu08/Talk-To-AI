@@ -30,6 +30,7 @@ Keyboard shortcuts on your device activate the app and a chosen LLM, which then 
 - [x] Menu bar dropdown with status, quick toggles, and Settings / Quit
 - [x] Settings window with sidebar sections (General, AI Model, Voice)
 - [x] Model picker with descriptions (free, fast, deep thinking), plus Other… for any model
+- [x] API key saved per provider (swaps with the provider), plus named extra keys
 - [x] Custom hotkey recording + UI
 - [x] Floating response window with the question, formatted answer, Copy, Stop, and Done
 - [x] On-device Whisper transcription (free, offline, more accurate), Google as backup
@@ -51,6 +52,7 @@ Keyboard shortcuts on your device activate the app and a chosen LLM, which then 
 - [ ] Microphone picker and live input level in Settings
 - [ ] Streaming AI responses (start speaking before the full answer arrives)
 - [ ] Switch Gemini to the newer `google-genai` SDK (the current library is deprecated)
+- [ ] Store API keys in the macOS Keychain instead of settings.json
 - [ ] Apple code signing and notarization (no security warning on first launch)
 - [ ] Homebrew install (`brew install --cask talk-to-ai`)
 - [ ] Offline mode with local LLMs fallback

@@ -20,11 +20,11 @@ from typing import Any, List
 from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtWidgets import (
     QComboBox, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem,
-    QMainWindow, QPushButton, QScrollArea, QSlider, QStackedWidget,
+    QMainWindow, QMessageBox, QPushButton, QScrollArea, QSlider, QStackedWidget,
     QVBoxLayout, QWidget,
 )
 
-from app import app_support, models_catalog
+from app import api_keys, app_support, models_catalog
 from app.theme import COLORS, icon
 from app.transcriber import DEFAULT_ENGINE, DEFAULT_MODEL, WHISPER_MODELS
 from app.widgets import Card, KeycapField, SettingRow, ToggleSwitch, label
@@ -48,6 +48,10 @@ SPEECH_ENGINES: list = [
 
 # AI provider options
 AI_PROVIDERS: list = ["", "Claude", "ChatGPT", "Gemini"]
+
+# Last entry in the key dropdown: adds a named key
+ADD_KEY: str = "__add__"
+ADD_KEY_LABEL: str = "Add another key…"
 
 # Last entry in the model dropdown: lets the user type any model ID
 OTHER_MODEL: str = "__other__"
@@ -96,7 +100,8 @@ class SettingsPanel(QMainWindow):
             api_provider (QComboBox): Dropdown to select AI provider
             model_choice (QComboBox): Listed models for the provider, plus "Other…"
             api_model (QLineEdit): Custom model ID, shown when "Other…" is picked
-            api_key (QLineEdit): Password field for API key
+            key_choice (QComboBox): Saved keys for the provider (Primary, named extras)
+            api_key (QLineEdit): Password field for the selected key
 
         Voice Widgets:
             voice_speed (QSlider): Slider for voice speed (50-200%)
@@ -432,10 +437,50 @@ class SettingsPanel(QMainWindow):
         self.model_choice.currentIndexChanged.connect(self._on_model_changed)
         self.api_model.textChanged.connect(self.settings_change)
 
-        self._section(layout, "Credentials")
+        self._section(layout, "API key")
         card = Card()
+        # Which saved key to use: Primary, any named extras, or "Add another key…"
+        self.key_choice: QComboBox = QComboBox()
+        self.key_choice.setMinimumWidth(180)
+        self.remove_key_button = QPushButton("Remove")
+        self.remove_key_button.setProperty("variant", "ghost")
+        self.remove_key_button.setIcon(icon("trash", COLORS["text_secondary"], 13))
+        self.remove_key_button.setToolTip("Delete this saved key")
+        self.remove_key_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.remove_key_button.clicked.connect(self._on_remove_key)
+        key_controls = QWidget()
+        key_controls_layout = QHBoxLayout(key_controls)
+        key_controls_layout.setContentsMargins(0, 0, 0, 0)
+        key_controls_layout.setSpacing(6)
+        key_controls_layout.addWidget(self.remove_key_button)
+        key_controls_layout.addWidget(self.key_choice)
+        self.key_row = card.add_row(SettingRow(
+            "Key", "Each provider remembers its own keys", key_controls))
+
+        # Inline form for naming a new key (shown after "Add another key…")
+        self.new_key_name = QLineEdit()
+        self.new_key_name.setPlaceholderText("Name this key, e.g. Work")
+        self.new_key_name.setMaxLength(api_keys.MAX_NAME_LENGTH)
+        self.new_key_name.returnPressed.connect(self._on_add_key)
+        add_button = QPushButton("Add")
+        add_button.setProperty("variant", "primary")
+        add_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        add_button.clicked.connect(self._on_add_key)
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setProperty("variant", "ghost")
+        cancel_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_button.clicked.connect(self._hide_add_key_form)
+        self.add_key_form = QWidget()
+        form_layout = QHBoxLayout(self.add_key_form)
+        form_layout.setContentsMargins(14, 0, 14, 12)
+        form_layout.setSpacing(8)
+        form_layout.addWidget(self.new_key_name, 1)
+        form_layout.addWidget(cancel_button)
+        form_layout.addWidget(add_button)
+        self.add_key_form.hide()
+        card._layout.addWidget(self.add_key_form)
+
         self.api_key: QLineEdit = QLineEdit()
-        self.api_key.setText(self.config.get("api", "api_key") or "")
         self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key.setPlaceholderText("Paste your API key")
         self.api_key.textChanged.connect(self.settings_change)
@@ -443,13 +488,16 @@ class SettingsPanel(QMainWindow):
                                         QLineEdit.ActionPosition.TrailingPosition)
         reveal.setToolTip("Show or hide key")
         reveal.triggered.connect(self._toggle_key_visibility)
-        card.add_row(SettingRow("API key", "", self.api_key, stacked=True))
+        self.api_key_row = card.add_row(SettingRow("API key", "", self.api_key, stacked=True))
         card.add_row(SettingRow(
             "Stored only on this Mac",
             "Saved in ~/.talktoai/settings.json and sent only to the provider you pick.",
             icon_name="lock",
         ))
         layout.addWidget(card)
+
+        self._fill_keys()
+        self.key_choice.currentIndexChanged.connect(self._on_key_choice_changed)
 
         layout.addStretch(1)
         return body
@@ -531,7 +579,78 @@ class SettingsPanel(QMainWindow):
         self.api_model.clear()
         self.api_model.blockSignals(False)
         self._fill_models(keep)
+        self._hide_add_key_form()
+        self._fill_keys()  # the new provider's keys (its Primary unless another was picked)
         self.settings_change()
+        api_keys.sync_current(self.config)
+
+    # -------------------------------------------------------------- key picker
+
+    def _fill_keys(self) -> None:
+        """List the current provider's saved keys and load the active one."""
+        provider = self._provider_value()
+        active = api_keys.active_name(self.config, provider) if provider else ""
+        self.key_choice.blockSignals(True)
+        self.key_choice.clear()
+        for name in api_keys.names(self.config, provider):
+            self.key_choice.addItem(name, name)
+        if provider:
+            self.key_choice.insertSeparator(self.key_choice.count())
+            self.key_choice.addItem(ADD_KEY_LABEL, ADD_KEY)
+            self.key_choice.setCurrentIndex(max(0, self.key_choice.findData(active)))
+        self.key_choice.blockSignals(False)
+        self.key_choice.setEnabled(bool(provider))
+
+        self.api_key.blockSignals(True)
+        self.api_key.setText(api_keys.get_key(self.config, provider, active) if provider else "")
+        self.api_key.blockSignals(False)
+        self.api_key.setEnabled(bool(provider))
+        self.api_key.setPlaceholderText(
+            f"Paste your {provider} API key" if provider else "Choose a provider first")
+        self.remove_key_button.setVisible(bool(provider) and active != api_keys.PRIMARY)
+        self.api_key_row.set_hint(
+            f"Used for {provider} ({active})" if provider and active != api_keys.PRIMARY else "")
+
+    def _on_key_choice_changed(self, _index: int) -> None:
+        provider = self._provider_value()
+        choice = self.key_choice.currentData()
+        if choice == ADD_KEY:
+            self._fill_keys()  # put the dropdown back on the active key
+            self.add_key_form.show()
+            self.new_key_name.clear()
+            self.new_key_name.setFocus()
+            return
+        self._hide_add_key_form()
+        api_keys.set_active(self.config, provider, choice)
+        self._fill_keys()
+
+    def _on_add_key(self) -> None:
+        provider = self._provider_value()
+        error = api_keys.add_key(self.config, provider, self.new_key_name.text())
+        if error:
+            self._flash_hint(self.key_row, error, "error")
+            return
+        self._hide_add_key_form()
+        self._fill_keys()
+        self._flash_hint(self.key_row, "✓ Added. Paste the key below.", "success")
+        self.api_key.setFocus()
+
+    def _hide_add_key_form(self) -> None:
+        self.add_key_form.hide()
+        self.new_key_name.clear()
+
+    def _on_remove_key(self) -> None:
+        provider = self._provider_value()
+        name = api_keys.active_name(self.config, provider)
+        if name == api_keys.PRIMARY:
+            return
+        answer = QMessageBox.question(
+            self, "Remove key", f"Remove the {provider} key “{name}”? This can't be undone.")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        api_keys.remove_key(self.config, provider, name)
+        self._fill_keys()
+        self._flash_hint(self.key_row, f"Removed. Using the {api_keys.PRIMARY} key.", "success")
 
     def _provider_value(self) -> str:
         """Selected provider name, or "" when the placeholder item is selected."""
@@ -673,7 +792,11 @@ class SettingsPanel(QMainWindow):
             # Save API settings
             self.config.set("api", "provider", self._provider_value())
             self.config.set("api", "model", self._model_value())
-            self.config.set("api", "api_key", self.api_key.text())
+            provider = self._provider_value()
+            if provider:
+                api_keys.set_key(self.config, provider,
+                                 api_keys.active_name(self.config, provider),
+                                 self.api_key.text().strip())
 
             # Save voice settings (convert slider 50-200 to 0.5-2.0 multiplier)
             self.config.set("voice", "speed", self.voice_speed.value() / 100)
