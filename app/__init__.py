@@ -6,13 +6,17 @@ and UI components.
 
 Modules:
     config: Configuration management and settings persistence
-    menu_bar: System tray icon and application menu
+    menu_bar: Menu bar icon and dropdown popover
     hotkey_listener: Global keyboard hotkey detection
-    audio_handler: Audio recording and speech-to-text transcription
+    audio_handler: Microphone recording and audio checks
+    transcriber: Speech-to-text (local Whisper, Google as backup)
     ai_handler: AI API routing (Claude, ChatGPT, Gemini)
-    voice_handler: Text-to-speech synthesis and audio playback
-    settings_panel: Settings configuration UI
-    response_display: AI response popup display window
+    voice_handler: Interruptible text-to-speech
+    settings_panel: Settings window
+    response_display: Floating response window
+    theme: Shared colors, fonts, icons and stylesheet
+    widgets: Reusable UI components
+    app_support: Logging, single instance, permissions, Open at login
 
 Usage:
     from app.config import ConfigManager
@@ -20,7 +24,7 @@ Usage:
     from app.ai_handler import AIHandler
     
     config = ConfigManager()
-    audio = AudioHandler()
+    audio = AudioHandler(config)
     ai = AIHandler(config)
 """
 

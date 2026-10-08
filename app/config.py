@@ -1,7 +1,7 @@
 """Configuration Manager: Settings storage and retrieval.
 
 This module provides centralized configuration management for the Talk-To-AI application.
-Settings are persisted to JSON files in the user's home directory (~/.shortcutai/),
+Settings are persisted to JSON files in the user's home directory (~/.talktoai/),
 allowing settings to survive application restarts. 
 
 The ConfigManager supports:
@@ -37,21 +37,22 @@ class ConfigManager:
     accessing and modifying settings.
     
     Configuration Structure:
-        settings.json contains four main sections:
+        settings.json contains five main sections:
         - hotkeys: Global keyboard shortcuts {"start": str, "stop": str}
         - api: AI provider configuration {"provider": str, "model": str, "api_key": str}
+        - speech: Speech recognition {"engine": "whisper"|"google", "model": str}
         - voice: Text-to-speech settings {"speed": float, "voice_name": str}
         - response_mode: Output preferences {"voice": bool, "popup": bool}
     
     Attributes:
-        config_folder (str): Path to ~/.shortcutai directory
+        config_folder (str): Path to ~/.talktoai directory
         settings_file (str): Path to settings.json
         default_settings_file (str): Path to settings_default.json (backup)
         settings (Dict[str, Dict]): In-memory settings dictionary
         
     File Locations:
-        - ~/.shortcutai/settings.json - Current application settings
-        - ~/.shortcutai/settings_default.json - Default settings template
+        - ~/.talktoai/settings.json - Current application settings
+        - ~/.talktoai/settings_default.json - Default settings template
         
     Example:
         >>> config = ConfigManager()
@@ -63,12 +64,12 @@ class ConfigManager:
     def __init__(self) -> None:
         """Initialize the config manager and create default settings if needed.
         
-        Creates the ~/.shortcutai directory if it doesn't exist, loads existing
+        Creates the ~/.talktoai directory if it doesn't exist, loads existing
         settings from disk, and creates a default settings template for reset
         functionality.
         
         Side Effects:
-            - Creates ~/.shortcutai directory if it doesn't exist
+            - Creates ~/.talktoai directory if it doesn't exist
             - Loads settings.json if it exists
             - Creates settings_default.json on first run
             - Logs initialization messages

@@ -6,6 +6,7 @@ Keyboard shortcuts on your device activate the app and a chosen LLM, which then 
 
 ## Completed Features
 
+### MVP (9/26/2026)
 - [x] Global hotkey detection (cmd+option+space, customizable)
 - [x] Multi-AI support (Claude, ChatGPT, Gemini)
 - [x] Voice input (Google Speech-to-Text transcription)
@@ -23,32 +24,51 @@ Keyboard shortcuts on your device activate the app and a chosen LLM, which then 
 - [x] Audio recording and transcription pipeline
 - [x] Response display modes (voice, popup, or both)
 - [x] Settings window with close button fix
+
+### v1.1 (10/8/2026)
+- [x] UI polishing and visual improvements (dark, macOS-style redesign across every window)
+- [x] Menu bar dropdown with status, quick toggles, and Settings / Quit
+- [x] Settings window with sidebar sections (General, AI Model, Voice)
 - [x] Custom hotkey recording + UI
-- [x] UI polishing and visual improvements
+- [x] Floating response window with the question, formatted answer, Copy, Stop, and Done
+- [x] On-device Whisper transcription (free, offline, more accurate), Google as backup
+- [x] Answer length matched to the question (quick vs. complex)
+- [x] Interruptible speech (Esc, Stop, Done, or asking a new question)
+- [x] Voice picker using the voices installed on the Mac
+- [x] Conversation history for Gemini
+- [x] Clear error messages (missing API key, blocked microphone, unclear audio)
+- [x] Create a proper app version (Talk-To-AI.app and .dmg, built with PyInstaller)
+- [x] Open at login, single running copy, log file, permission checks
+- [x] Automatic .dmg builds on GitHub for tagged releases
 
 ## In Progress
 
 - [ ] Context awareness (clipboard, browser content)
-- [ ] Create a proper app version
 
 ## Planned Features
 
+- [ ] Microphone picker and live input level in Settings
+- [ ] Streaming AI responses (start speaking before the full answer arrives)
+- [ ] Switch Gemini to the newer `google-genai` SDK (the current library is deprecated)
+- [ ] Apple code signing and notarization (no security warning on first launch)
+- [ ] Homebrew install (`brew install --cask talk-to-ai`)
 - [ ] Offline mode with local LLMs fallback
 - [ ] Persistent conversation history across sessions
 - [ ] Windows/Linux support
-- [ ] Packaged .app distribution (PyInstaller)
-- [ ] Streaming AI responses
 - [ ] Multi-app session management
 
 ## Technical Architecture
 
-- **Desktop Framework**: PyQt6 (macOS native)
+- **Desktop Framework**: PyQt6 with a shared dark theme (macOS native look)
 - **Hotkey Detection**: pynput (global keyboard monitoring)
-- **Audio**: sounddevice + Google Speech-to-Text
+- **Audio**: sounddevice (continuous microphone stream)
+- **Speech Recognition**: Whisper via faster-whisper (on-device), Google Speech-to-Text (backup)
 - **AI Providers**: Anthropic SDK, OpenAI SDK, Google Generative AI
-- **Text-to-Speech**: pyttsx3 (cross-platform)
+- **Text-to-Speech**: macOS `say` (interruptible), pyttsx3 on other systems
+- **Concurrency**: Worker threads for slow work; Qt signals for UI updates
 - **Configuration**: JSON (local file storage at ~/.talktoai/)
 - **Background Execution**: Menu bar application
+- **Packaging**: PyInstaller (.app + .dmg), GitHub Actions for release builds
 - **Code Quality**: Type hints, comprehensive docstrings, error handling
 
 ## Dates
@@ -57,3 +77,4 @@ Keyboard shortcuts on your device activate the app and a chosen LLM, which then 
 - **Detailed Planning**: 8/25/2026
 - **To-Do List**: 8/30/2026
 - **MVP Completion**: 9/26/2026
+- **v1.1 (Redesign, Whisper, Mac App)**: 10/8/2026

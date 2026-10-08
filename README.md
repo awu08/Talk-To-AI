@@ -1,23 +1,26 @@
 # Talk-To-AI
 
-A macOS desktop voice assistant that brings Claude, ChatGPT, or Gemini to your fingertips with a single keyboard shortcut. Record voice questions from any application and get instant AI responses with text-to-speech.
+A macOS menu bar voice assistant that brings Claude, ChatGPT, or Gemini to your fingertips with a single keyboard shortcut. Ask a question out loud from any app, and get the answer spoken back and shown in a small window.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.13%2B-blue.svg)
+![Platform](https://img.shields.io/badge/macOS-12%2B-black.svg)
 ![Status](https://img.shields.io/badge/status-active-brightgreen.svg)
 
 ## Features
 
-- **Global Hotkey** — Press `cmd+option+space` (customizable) from anywhere to activate
-- **Voice Input** — Speak naturally; Whisper transcribes it right on your Mac (free and offline), with Google as a backup
-- **Multi-AI Support** — Choose between Claude, ChatGPT, or Gemini APIs
-- **Voice Response** — AI answers spoken aloud with customizable voice and speed
-- **Right-sized answers** — Quick questions get a sentence or two; harder ones get only as much as they need
-- **Interruptible** — Press `esc`, click Stop or Done, or just ask a new question to cut the voice off
-- **Conversation History** — Maintain context across multiple queries
-- **Menu Bar Integration** — Minimal UI; lives in your system tray
-- **Real-Time Settings** — Configure hotkeys, API keys, voice settings on-the-fly
-- **Privacy-First** — API keys stored locally on your machine
+- **Global Hotkey** — Press `⌘ ⌥ Space` from any app to start talking, `Esc` to send
+- **Custom Shortcuts** — Click a shortcut in Settings and press the new combo to change it
+- **On-Device Transcription** — Whisper turns your speech into text right on your Mac (free, private, works offline), with Google as a backup
+- **Multi-AI Support** — Choose between Claude, ChatGPT, or Gemini
+- **Right-Sized Answers** — Quick questions get a sentence or two; harder ones get only as much as they need
+- **Voice Response** — Answers are read aloud with any voice installed on your Mac, at the speed you choose
+- **Interruptible** — Press `Esc`, click **Stop speaking** or **Done**, or just ask a new question to cut the voice off
+- **Response Window** — A floating panel shows your question and the formatted answer, with Copy
+- **Menu Bar App** — No Dock icon; a dropdown panel shows status, quick toggles, Settings and Quit
+- **Open at Login** — Optionally starts automatically when you log in
+- **Conversation History** — The AI remembers earlier questions until you clear them
+- **Privacy-First** — API keys and settings stay on your Mac; speech is transcribed locally
 
 ## Install the App
 
@@ -27,23 +30,38 @@ A macOS desktop voice assistant that brings Claude, ChatGPT, or Gemini to your f
 4. When asked, allow the **Microphone**. Then turn on Talk-To-AI under **System Settings → Privacy & Security → Accessibility** (needed for the global shortcut) and reopen the app.
 5. Click the microphone in the menu bar → **Settings → AI Model** and add your API key.
 
-The app has no Dock icon; it lives in the menu bar. Turn on **Settings → General → Open at login** to start it automatically. Logs are in `~/Library/Logs/Talk-To-AI/`.
+The first question downloads the Whisper speech model once (about 500 MB for the default size; you can pick a smaller or larger one in **Settings → Voice**).
+
+## Usage
+
+1. **Press your start shortcut** (default: `⌘ ⌥ Space`) — the menu bar mic turns orange
+2. **Ask your question**
+3. **Press your stop shortcut** (default: `Esc`) — the response window shows "Thinking…"
+4. **Get the answer** — spoken aloud and shown in the response window
+5. **Stop it anytime** — press `Esc` again, click **Stop speaking** or **Done**, or press the start shortcut to ask something new
+
+Click the menu bar mic for status, to turn spoken answers or the response window on and off, to clear the conversation, or to open Settings.
+
+## Settings
+
+| Section | What you can change |
+|---------|---------------------|
+| **General** | Start/stop shortcuts, spoken answers, response window, Open at login, clear chat history |
+| **AI Model** | Provider (Claude, ChatGPT, Gemini), model name, API key |
+| **Voice** | Speech recognition (Whisper or Google), Whisper accuracy, voice, speaking speed |
+
+Changes save automatically.
 
 ## Build the App Yourself
 
 On a Mac, from the project folder:
 
 ```bash
-bash build_app.sh
+bash build_app.sh            # builds dist/Talk-To-AI.app and dist/Talk-To-AI-<version>.dmg
+bash build_app.sh --install  # same, then puts the app straight into Applications
 ```
 
-This creates `dist/Talk-To-AI.app` and `dist/Talk-To-AI-<version>.dmg` for the kind of Mac you're on. It takes a few minutes.
-
-To put the app straight into Applications (replacing and restarting any older copy), use:
-
-```bash
-bash build_app.sh --install
-```
+It builds for the kind of Mac you're on and takes a few minutes. You need Python 3.10+ and about 3 GB of free disk space.
 
 To have GitHub build the .dmg for you, push a version tag. The workflow in `.github/workflows/build-macos.yml` attaches the .dmg to a new Release:
 
@@ -56,8 +74,8 @@ git push origin v1.1.0
 
 ### Prerequisites
 - macOS 12+
-- Python 3.13+
-- API key from Claude, OpenAI, or Google Gemini (free tier available)
+- Python 3.10+ (3.13 recommended)
+- API key from Claude, OpenAI, or Google Gemini (Gemini has a free tier)
 
 ### Installation
 
@@ -78,36 +96,40 @@ pip install -r requirements.txt
 
 1. **Get an API Key** (choose one):
    - **Claude:** https://console.anthropic.com → Create API Key
-   - **Gemini (Free):** https://ai.google.dev → Create API Key (1M tokens/day)
+   - **Gemini (free tier):** https://ai.google.dev → Create API Key
    - **OpenAI:** https://platform.openai.com
 
 2. **Run the application:**
-```bash
+   ```bash
    python3 main.py
-```
+   ```
 
 3. **Configure in Settings:**
    - Click the menu bar microphone → Settings
-   - Enter your API key
-   - Select AI provider and model
-   - Customize hotkeys (click a shortcut under General and press your new combo) and voice settings
+   - Under **AI Model**, choose a provider, enter the model name and paste your API key
+   - Optionally change shortcuts (click one under General and press your new combo) and voice settings
 
-## Usage
+When running from source, macOS asks for Microphone and Accessibility permission for your terminal app rather than for Talk-To-AI.
 
-1. **Press your hotkey** (default: `cmd+option+space`)
-2. **Speak your question** — Microphone activates
-3. **Press stop hotkey** (default: `esc`)
-4. **AI responds** — Voice plays + optional popup
-5. **Stop it anytime** — press `esc` again, click **Stop speaking**, or press the start hotkey to ask something new
+## Troubleshooting
 
-The first launch downloads the Whisper speech model once (about 500 MB for the default size; change it in Settings → Voice).
+| Problem | Fix |
+|---------|-----|
+| The shortcut does nothing | Turn on Talk-To-AI (or your terminal, if running from source) in **System Settings → Privacy & Security → Accessibility**, then reopen the app |
+| "The microphone recorded silence" | Allow it in **System Settings → Privacy & Security → Microphone**, then reopen the app |
+| "Sorry, I didn't catch that" | Wait a moment after pressing the shortcut before speaking, speak closer to the mic, or choose a larger Whisper model in **Settings → Voice** |
+| "Add your API key…" | Enter it in **Settings → AI Model** |
+| The first answer takes a long time | Whisper is downloading its model; later questions are much faster |
+| Can't find the app | It has no Dock icon; look for the microphone in the menu bar near the clock |
+
+Logs are saved to `~/Library/Logs/Talk-To-AI/talk-to-ai.log`.
 
 ## Project Structure
 
-- **main.py** — Entry point, orchestrates all components
+- **main.py** — Entry point; coordinates hotkeys, recording, the AI and responses
 - **requirements.txt** — Python dependencies
-- **LICENSE** — MIT License
-- **README.md** — Documentation
+- **build_app.sh** — Builds `Talk-To-AI.app` and the `.dmg`
+- **README.md**, **ROADMAP.md**, **CHANGELOG.md**, **LICENSE**
 
 ### App Module (`app/`)
 - **config.py** — Settings management (stores in ~/.talktoai/settings.json)
@@ -115,16 +137,15 @@ The first launch downloads the Whisper speech model once (about 500 MB for the d
 - **hotkey_listener.py** — Global keyboard hotkey detection
 - **audio_handler.py** — Microphone recording and audio checks
 - **transcriber.py** — Speech-to-text: local Whisper, with Google as backup
-- **ai_handler.py** — AI API routing (Claude, ChatGPT, Gemini)
+- **ai_handler.py** — AI API routing (Claude, ChatGPT, Gemini) and the answer-length instructions
 - **voice_handler.py** — Interruptible text-to-speech
 - **settings_panel.py** — Settings window with sidebar sections (General, AI Model, Voice)
-- **response_display.py** — Floating response panel with Markdown, Copy and Done
+- **response_display.py** — Floating response window with Markdown, Copy, Stop and Done
 - **theme.py** — Shared dark theme: colors, fonts, icons and stylesheet
-- **widgets.py** — Reusable UI pieces (toggle switch, cards, setting rows, keycaps)
+- **widgets.py** — Reusable UI pieces (toggle switch, cards, setting rows, shortcut recorder)
 - **app_support.py** — App plumbing: log file, single instance, permission checks, Open at login
 
 ### Packaging
-- **build_app.sh** — Builds `Talk-To-AI.app` and the `.dmg`
 - **packaging/Talk-To-AI.spec** — PyInstaller recipe (bundled libraries, menu-bar-only, microphone permission text)
 - **packaging/make_icon.py** — Draws the app icon
 - **.github/workflows/build-macos.yml** — Builds the `.dmg` on GitHub for tagged releases
@@ -133,12 +154,13 @@ The first launch downloads the Whisper speech model once (about 500 MB for the d
 
 | Component | Technology |
 |-----------|-----------|
-| **Desktop UI** | PyQt6 |
+| **Desktop UI** | PyQt6 with a custom dark theme |
 | **Hotkey Detection** | pynput |
 | **Audio Capture** | sounddevice, numpy |
 | **Speech Recognition** | Whisper via faster-whisper (local), Google Speech-to-Text (backup) |
 | **AI Providers** | Anthropic SDK, OpenAI SDK, Google Generative AI |
 | **Text-to-Speech** | macOS `say` (interruptible), pyttsx3 on other systems |
+| **Packaging** | PyInstaller, GitHub Actions |
 | **Configuration** | JSON (local file storage) |
 
 ## Configuration
@@ -171,34 +193,33 @@ Settings are stored in `~/.talktoai/settings.json`:
 }
 ```
 
+`voice_name` is empty for the system's default voice. `speech.model` can be `base.en` (fast), `small.en` (balanced) or `medium.en` (most accurate).
+
 ## API Recommendations
 
 | Provider | Free Tier | Best For |
 |----------|-----------|----------|
-| **Gemini** | 1M tokens/day | Best free option |
+| **Gemini** | Yes (with daily limits) | Best free option |
 | **Claude** | None (pay-as-you-go) | Best reasoning |
 | **ChatGPT** | None (pay-as-you-go) | Popular choice |
 
-**For testing:** Use Gemini free tier (no payment required)
+**For testing:** Use the Gemini free tier (no payment required). Free-tier limits change, so check Google AI Studio for current numbers.
 
-## Features in Development
+## Roadmap
 
-- [ ] Context awareness (clipboard, browser content)
-- [ ] Persistent conversation history
-- [x] Custom hotkey recording UI
-- [ ] Windows/Linux support
-- [x] Packaged .app distribution
-- [ ] Streaming AI responses
+See [ROADMAP.md](ROADMAP.md) for what's done and what's planned, and [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 
 ## What I Learned
 
 This project demonstrates:
 
-- Full-stack desktop application development using PyQt6
+- Full-stack desktop application development using PyQt6, including a custom design system
 - Cross-platform keyboard event handling with pynput at OS level
-- Async/threading patterns for responsive UI during long operations
-- Multi-API integration with unified interface for Claude, ChatGPT, and Gemini
-- Audio processing (recording, format conversion, transcription)
+- Async/threading patterns for responsive UI: worker threads, Qt signals, and cancelling stale work
+- Multi-API integration with a unified interface for Claude, ChatGPT, and Gemini
+- Prompt design to control answer length and style for spoken responses
+- Audio processing and on-device machine learning (recording, level checks, local Whisper transcription)
+- Packaging a Python app as a native macOS app, with CI builds on GitHub Actions
 - Configuration management with JSON persistence
 - Professional Python practices (type hints, logging, error handling, docstrings)
 - Git workflow and open-source project structure

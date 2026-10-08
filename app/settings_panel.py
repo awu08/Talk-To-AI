@@ -80,9 +80,9 @@ class SettingsPanel(QMainWindow):
     """UI panel for configuring all Talk-To-AI application settings.
 
     The window is split into a sidebar and three pages:
-        - General: shortcuts, response mode and conversation history
+        - General: shortcuts, response mode, Open at login and conversation history
         - AI Model: provider, model name and API key
-        - Voice: voice and speaking speed
+        - Voice: speech recognition engine, voice and speaking speed
 
     All changes are automatically persisted to the configuration file.
 
@@ -92,8 +92,8 @@ class SettingsPanel(QMainWindow):
         ai_handler (AIHandler): AI handler for clearing conversation history
 
         Hotkey Widgets:
-            start_hotkey (QLineEdit): Display-only keycap for the start hotkey
-            stop_hotkey (QLineEdit): Display-only keycap for the stop hotkey
+            start_hotkey (KeycapField): Start shortcut; click it to record a new one
+            stop_hotkey (KeycapField): Stop shortcut; click it to record a new one
 
         API Widgets:
             api_provider (QComboBox): Dropdown to select AI provider
