@@ -40,6 +40,14 @@ find_python() {
     return 1
 }
 
+# The build needs a few GB of free space (bundled libraries, then the .dmg)
+FREE_GB=$(df -k . | awk 'NR==2 {print int($4 / 1048576)}')
+if (( FREE_GB < 3 )); then
+    echo "Only ${FREE_GB} GB free on this disk; the build needs about 3 GB." >&2
+    echo "Free up some space (empty the Trash, delete old downloads) and try again." >&2
+    exit 1
+fi
+
 echo "==> Setting up the build environment"
 if [[ -x venv/bin/python ]] && ! venv/bin/python -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
     echo "    The existing venv uses an old Python; making a new one"
@@ -75,13 +83,19 @@ echo "==> Signing (ad-hoc, for running on your own Mac)"
 codesign --force --deep --sign - "$APP"
 
 echo "==> Making the .dmg"
+rm -rf build/pyinstaller  # temporary build files; frees space for the .dmg
 DMG="dist/Talk-To-AI-$VERSION.dmg"
 STAGING="build/dmg"
 rm -rf "$STAGING" "$DMG"
 mkdir -p "$STAGING"
-cp -R "$APP" "$STAGING/"
+# Move the app in (instant, no second copy on disk) and always move it back
+mv "$APP" "$STAGING/"
+trap 'mv "$STAGING/Talk-To-AI.app" "$APP" 2>/dev/null || true' EXIT
 ln -s /Applications "$STAGING/Applications"
 hdiutil create -quiet -volname "Talk-To-AI" -srcfolder "$STAGING" -ov -format UDZO "$DMG"
+mv "$STAGING/Talk-To-AI.app" "$APP"
+trap - EXIT
+rm -rf "$STAGING"
 
 echo
 echo "Done!"
