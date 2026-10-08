@@ -76,6 +76,8 @@ class ResponseDisplay(RoundedPanel):
         self.config = config
         self._drag_offset = None
         self.setWindowTitle("Talk-To-AI Response")
+        # macOS hides tool windows when you click another app; keep this one visible
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
         self.setFixedWidth(DEFAULT_WINDOW_WIDTH)
         self.response_ready.connect(self.show_response)
         self.thinking_ready.connect(self.show_thinking)
@@ -141,9 +143,9 @@ class ResponseDisplay(RoundedPanel):
         footer.addWidget(self.copy_button)
         self.stop_button = QPushButton("  Stop speaking")
         self.stop_button.setIcon(icon("stop", COLORS["text"], 12))
-        self.stop_button.setToolTip("Stop reading the answer aloud (or press your stop shortcut)")
+        self.stop_button.setToolTip("Stop reading the answer aloud")
         self.stop_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.stop_button.clicked.connect(self._stop_speaking)
+        self.stop_button.clicked.connect(lambda: self._stop_speaking("Stop button"))
         self.stop_button.hide()
         footer.addWidget(self.stop_button)
         footer.addStretch(1)
@@ -171,7 +173,7 @@ class ResponseDisplay(RoundedPanel):
 
     def dismiss(self) -> None:
         """Close the window and stop any spoken answer ("I've got it")."""
-        self._stop_speaking()
+        self._stop_speaking("Done")
         self.hide()
 
     def show_thinking(self, question: str) -> None:
@@ -241,9 +243,9 @@ class ResponseDisplay(RoundedPanel):
     def _set_speaking(self, speaking: bool) -> None:
         self.stop_button.setVisible(speaking)
 
-    def _stop_speaking(self) -> None:
+    def _stop_speaking(self, reason: str) -> None:
         if callable(self.on_stop_speaking):
-            self.on_stop_speaking()
+            self.on_stop_speaking(reason)
 
     def _copy(self) -> None:
         QApplication.clipboard().setText(self._plain_text)

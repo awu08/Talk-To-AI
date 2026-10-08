@@ -110,13 +110,18 @@ class VoiceAssistant:
                 return
             self._recording = True
             self._question_id += 1  # anything still working on an older question is now stale
-        self.voice_handler.stop()
+        self.voice_handler.stop("new question")
         self.menu_bar.change_icon("unmuted_microphone.png")
         self.audio_handler.start_recording()
         logger.debug("Recording started via hotkey")
 
     def on_recording_stopped(self) -> None:
-        """Stop hotkey: send the recording, or, if not recording, stop talking."""
+        """Stop hotkey: send the recording.
+
+        When not recording, it only stops the voice if the user turned on
+        "Stop shortcut also stops speaking" (off by default, since Esc is
+        pressed all the time in other apps).
+        """
         with self._state_lock:
             if not self._recording:
                 stop_speaking = True
@@ -125,7 +130,10 @@ class VoiceAssistant:
                 self._recording = False
                 question_id = self._question_id
         if stop_speaking:
-            self.stop_speaking()
+            if self.config.get("response_mode", "stop_key_stops_speech"):
+                self.stop_speaking("stop shortcut")
+            else:
+                logger.debug("Stop shortcut pressed while not recording; voice keeps going")
             return
         threading.Thread(target=self._answer, args=(question_id,), daemon=True).start()
 
@@ -134,9 +142,9 @@ class VoiceAssistant:
         self.response_display.set_speaking_async(speaking)
         self.menu_bar.set_speaking(speaking)
 
-    def stop_speaking(self) -> None:
-        """Stop the spoken answer now (Stop button, stop hotkey, Done)."""
-        self.voice_handler.stop()
+    def stop_speaking(self, reason: str = "") -> None:
+        """Stop the spoken answer now (Stop button, Done, or the stop shortcut if enabled)."""
+        self.voice_handler.stop(reason)
 
     def _is_current(self, question_id: int) -> bool:
         return question_id == self._question_id

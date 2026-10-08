@@ -178,7 +178,7 @@ class VoiceHandler:
         text = clean_for_speech(text)
         if not text:
             return
-        self.stop()
+        self.stop("starting the next answer")
         with self._lock:
             ticket = self._stop_count
 
@@ -200,14 +200,19 @@ class VoiceHandler:
         finally:
             self._set_speaking(False)
 
-    def stop(self) -> None:
-        """Stop speaking right away. Safe to call from any thread, any time."""
+    def stop(self, reason: str = "") -> None:
+        """Stop speaking right away. Safe to call from any thread, any time.
+
+        Args:
+            reason: why it was stopped (e.g. "new question", "Stop button"),
+                written to the log so unexpected stops can be traced.
+        """
         with self._lock:
             self._stop_count += 1
             process, self._process = self._process, None
         if process and process.poll() is None:
             process.terminate()
-            logger.info("Speech stopped")
+            logger.info(f"Speech stopped ({reason or 'no reason given'})")
         if self._engine is not None and self._speaking:
             try:
                 self._engine.stop()

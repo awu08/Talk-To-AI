@@ -177,7 +177,8 @@ class ConfigManager:
             },
             "response_mode": {
                 "voice": True,
-                "popup": True
+                "popup": True,
+                "stop_key_stops_speech": False
             }
         }
 

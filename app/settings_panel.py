@@ -59,7 +59,7 @@ OTHER_MODEL_LABEL: str = "Other…"
 
 # Window geometry constants
 SETTINGS_WINDOW_WIDTH: int = 760
-SETTINGS_WINDOW_HEIGHT: int = 690
+SETTINGS_WINDOW_HEIGHT: int = 740
 SETTINGS_WINDOW_X: int = 100
 SETTINGS_WINDOW_Y: int = 100
 SIDEBAR_WIDTH: int = 210
@@ -341,6 +341,15 @@ class SettingsPanel(QMainWindow):
         self.response_popup.stateChanged.connect(self.settings_change)
         card.add_row(SettingRow("Show response window", "Display the answer as text on screen",
                                 self.response_popup))
+
+        self.stop_key_stops_speech: ToggleSwitch = ToggleSwitch()
+        self.stop_key_stops_speech.setChecked(
+            _bool_setting(self.config.get("response_mode", "stop_key_stops_speech"), default=False))
+        self.stop_key_stops_speech.stateChanged.connect(self.settings_change)
+        card.add_row(SettingRow(
+            "Stop shortcut also stops speaking",
+            "Off: the voice only stops for a new question, Stop, or Done",
+            self.stop_key_stops_speech))
         layout.addWidget(card)
 
         # ===== APP SECTION =====
@@ -810,6 +819,8 @@ class SettingsPanel(QMainWindow):
             # Save response mode settings
             self.config.set("response_mode", "voice", self.response_voice.isChecked())
             self.config.set("response_mode", "popup", self.response_popup.isChecked())
+            self.config.set("response_mode", "stop_key_stops_speech",
+                            self.stop_key_stops_speech.isChecked())
 
             logger.debug("Settings updated and saved to configuration")
 

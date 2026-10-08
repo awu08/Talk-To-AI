@@ -17,7 +17,7 @@ A macOS menu bar voice assistant that brings Claude, ChatGPT, or Gemini to your 
 - **Model Picker** — Pick a model from a list that says what each one is good at (free, fastest, deeper thinking…), or choose **Other…** to use any model ID
 - **Right-Sized Answers** — Quick questions get a sentence or two; harder ones get only as much as they need
 - **Voice Response** — Answers are read aloud with any voice installed on your Mac, at the speed you choose
-- **Interruptible** — Press `Esc`, click **Stop speaking** or **Done**, or just ask a new question to cut the voice off
+- **Interruptible** — Ask a new question, or click **Stop speaking** or **Done**, to cut the voice off (it keeps talking while you use other apps)
 - **Response Window** — A floating panel shows your question and the formatted answer, with Copy
 - **Menu Bar App** — No Dock icon; a dropdown panel shows status, quick toggles, Settings and Quit
 - **Open at Login** — Optionally starts automatically when you log in
@@ -40,7 +40,7 @@ The first question downloads the Whisper speech model once (about 500 MB for the
 2. **Ask your question**
 3. **Press your stop shortcut** (default: `Esc`) — the response window shows "Thinking…"
 4. **Get the answer** — spoken aloud and shown in the response window
-5. **Stop it anytime** — press `Esc` again, click **Stop speaking** or **Done**, or press the start shortcut to ask something new
+5. **Stop it anytime** — press the start shortcut to ask something new, or click **Stop speaking** or **Done**. Clicking other apps or pressing `Esc` elsewhere won't cut it off (turn on **Settings → General → Stop shortcut also stops speaking** if you want `Esc` to stop it)
 
 Click the menu bar mic for status, to turn spoken answers or the response window on and off, to clear the conversation, or to open Settings.
 
@@ -48,7 +48,7 @@ Click the menu bar mic for status, to turn spoken answers or the response window
 
 | Section | What you can change |
 |---------|---------------------|
-| **General** | Start/stop shortcuts, spoken answers, response window, Open at login, clear chat history |
+| **General** | Start/stop shortcuts, spoken answers, response window, whether the stop shortcut also stops speaking, Open at login, clear chat history |
 | **AI Model** | Provider (Claude, ChatGPT, Gemini), model (from a described list, or Other… for any model ID), API key (one per provider, plus named extras via **Add another key…**) |
 | **Voice** | Speech recognition (Whisper or Google), Whisper accuracy, voice, speaking speed |
 
@@ -122,6 +122,7 @@ When running from source, macOS asks for Microphone and Accessibility permission
 | "The microphone recorded silence" | Allow it in **System Settings → Privacy & Security → Microphone**, then reopen the app |
 | "Sorry, I didn't catch that" | Wait a moment after pressing the shortcut before speaking, speak closer to the mic, or choose a larger Whisper model in **Settings → Voice** |
 | "Add your API key…" | Enter it in **Settings → AI Model** |
+| The voice stopped unexpectedly | The log lists every stop and why (`Speech stopped (…)`) |
 | The first answer takes a long time | Whisper is downloading its model; later questions are much faster |
 | Can't find the app | It has no Dock icon; look for the microphone in the menu bar near the clock |
 
@@ -198,7 +199,8 @@ Settings are stored in `~/.talktoai/settings.json`:
   },
   "response_mode": {
     "voice": true,
-    "popup": true
+    "popup": true,
+    "stop_key_stops_speech": false
   }
 }
 ```

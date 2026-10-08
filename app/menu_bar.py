@@ -173,7 +173,10 @@ class TrayPopover(RoundedPanel):
         if speaking:
             self.status_dot.set_color(COLORS["accent"])
             self.status_title.setText("Speaking…")
-            self.status_hint.setText(f"Press {stop} to stop")
+            if self.config.get("response_mode", "stop_key_stops_speech"):
+                self.status_hint.setText(f"Press {stop} or click Stop")
+            else:
+                self.status_hint.setText("Click Stop, or ask a new question")
         elif recording:
             self.status_dot.set_color(COLORS["orange"])
             self.status_title.setText("Listening…")
@@ -189,7 +192,7 @@ class TrayPopover(RoundedPanel):
 
     def _stop_speaking(self) -> None:
         if callable(self.menu_bar.on_stop_speaking):
-            self.menu_bar.on_stop_speaking()
+            self.menu_bar.on_stop_speaking("menu bar Stop")
 
     def _save_toggle(self, key: str, on: bool) -> None:
         if self._syncing:
@@ -352,7 +355,7 @@ class MenuBar:
         """Quit the application: stop speaking, close the event loop, and exit."""
         logger.info("Application quit initiated by user")
         if callable(self.on_stop_speaking):
-            self.on_stop_speaking()
+            self.on_stop_speaking("quitting")
         self.tray_icon.hide()
         QApplication.instance().quit()
         # If something (like a model download) is still busy, don't hang around

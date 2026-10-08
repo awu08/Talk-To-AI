@@ -6,6 +6,9 @@
 - The app kept reopening after Quit and couldn't be deleted. A background helper started while downloading the Whisper model was launching extra copies of the app; it now runs and exits properly.
 - Quit now always closes the app, stopping any speech first.
 - Speech problems are now written to the log (`~/Library/Logs/Talk-To-AI/talk-to-ai.log`) so they can be diagnosed.
+- The voice stopped whenever you pressed Esc in any app. Now it only stops for a new question, the Stop button, or Done. (Turn on **Stop shortcut also stops speaking** in Settings → General to get the old behavior.)
+- The response window disappeared when you clicked another app; it now stays on screen.
+- Every time the voice stops, the log records why.
 
 ## v1.1.0 — 10/8/2026
 
