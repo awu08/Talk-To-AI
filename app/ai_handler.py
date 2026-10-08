@@ -22,6 +22,17 @@ logger = logging.getLogger(__name__)
 
 # API configuration defaults
 DEFAULT_MAX_TOKENS: int = 1024
+
+# Sent with every request. Answers are spoken aloud, so length matters a lot:
+# quick questions get quick answers, hard ones get only as much as they need.
+SYSTEM_PROMPT: str = """You are a voice assistant. Your reply is read aloud and also shown in a small window, so keep it as short as the question allows.
+
+First judge what kind of question it is, then size the answer to fit:
+- Quick questions (facts, yes/no, definitions, conversions, times, spelling, small talk): answer in one or two short sentences. Give the answer first. No preamble, no restating the question, no extra background, and no offer to say more.
+- Questions that need explaining, reasoning, comparing options, or steps: give a fuller answer, usually one to three short paragraphs or a short numbered list. Cover what the person needs to understand or act, then stop.
+- If the person asks for detail ("explain", "walk me through", "in depth"), you can go longer. If they ask for it short, keep it short.
+
+Because the reply is spoken: write in plain, natural sentences. Avoid tables, headings, code blocks, links and emoji unless asked. Don't add caveats, disclaimers or a summary at the end unless they really matter."""
 SUPPORTED_PROVIDERS: set = {"Claude", "ChatGPT", "Gemini"}
 
 
@@ -151,6 +162,9 @@ class AIHandler:
             return response
 
         except Exception as e:
+            # Drop the unanswered question so the history stays user/assistant pairs
+            if self.conversation_history and self.conversation_history[-1]["role"] == "user":
+                self.conversation_history.pop()
             logger.error(f"Error communicating with {provider}: {e}", exc_info=True)
             raise
 
@@ -189,6 +203,7 @@ class AIHandler:
             response = client.messages.create(
                 model=model,
                 max_tokens=DEFAULT_MAX_TOKENS,
+                system=SYSTEM_PROMPT,
                 messages=messages
             )
 
@@ -232,7 +247,7 @@ class AIHandler:
 
             response = client.chat.completions.create(
                 model=model,
-                messages=messages,
+                messages=[{"role": "system", "content": SYSTEM_PROMPT}] + messages,
                 max_tokens=DEFAULT_MAX_TOKENS
             )
 
@@ -250,41 +265,37 @@ class AIHandler:
     ) -> str:
         """Send request to Gemini (Google) API.
         
-        Uses the Google Generative AI SDK to communicate with Gemini models.
-        Note: Due to API limitations, Gemini requests use only the latest user
-        message, not the full conversation history, even when use_history=True.
-        
+        Uses the Google Generative AI SDK to communicate with Gemini models,
+        sending the conversation history (roles mapped to Gemini's "user" /
+        "model") and the shared system prompt.
+
         Args:
             model (str): The Gemini model identifier (e.g., "gemini-2.0-flash")
             api_key (str): Google Generative AI API key for authentication
-            use_history (bool): Currently unused due to Gemini API limitations.
-                Included for API consistency with other providers.
-            
+            use_history (bool): If True, include previous messages for context
+
         Returns:
             str: The Gemini response text
-            
+
         Raises:
             Exception: If Google API request fails (authentication, rate limit, etc.)
-            
-        Note:
-            Gemini's API does not support full conversation history in the same way
-            as Claude and ChatGPT. Each request is stateless. This is a known
-            limitation of the current Google Generative AI SDK.
         """
         try:
             genai.configure(api_key=api_key)
-            gemini_model = genai.GenerativeModel(model)
+            gemini_model = genai.GenerativeModel(model, system_instruction=SYSTEM_PROMPT)
 
-            # Get the latest user message (Gemini doesn't support full history)
-            user_message: str = self.conversation_history[-1]["content"]
-
-            if use_history:
-                logger.debug(
-                    "Gemini API limitation: using only latest message, not full history"
-                )
-
-            response = gemini_model.generate_content(user_message)
-
+            # Gemini calls the assistant role "model"
+            messages: List[Dict[str, str]] = (
+                self.conversation_history
+                if use_history
+                else [self.conversation_history[-1]]
+            )
+            contents = [
+                {"role": "model" if m["role"] == "assistant" else "user",
+                 "parts": [m["content"]]}
+                for m in messages
+            ]
+            response = gemini_model.generate_content(contents)
             return response.text
             
         except Exception as e:

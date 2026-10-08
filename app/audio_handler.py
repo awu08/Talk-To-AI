@@ -1,239 +1,167 @@
-"""Audio Handler: Captures and transcribes audio using Google Speech Recognition.
+"""Audio Handler: Records the microphone and turns speech into text.
 
-This module provides real-time audio recording from the microphone and converts
-it to text using Google's free speech recognition API. Audio is captured in
-configurable chunks to allow for responsive stopping and maintains audio data
-in memory for transcription.
-
-The AudioHandler operates asynchronously: recording happens in a background thread
-to prevent blocking the UI, while transcription happens on demand when recording stops.
+Recording runs on one continuous input stream in a background thread, so the
+UI and hotkeys stay responsive. When recording stops, the audio is checked
+(too short? silent because the mic is blocked?), quiet speech is boosted, and
+the result is transcribed by app.transcriber: Whisper running on this computer
+by default, with Google's web API as a backup.
 
 Author: Allen Wu
-Version: 1.0.0
+Version: 1.1.0
 """
 
 import logging
-from typing import Optional
-import sounddevice as sd
+import threading
+from typing import Optional, Tuple
+
 import numpy as np
-import speech_recognition as sr
-from threading import Thread
+import sounddevice as sd
+
+from app.transcriber import Transcriber, TranscriptionError
 
 logger = logging.getLogger(__name__)
 
 # Audio recording configuration constants
-SAMPLE_RATE: int = 16000  # Hz - standard for speech recognition
-CHUNK_DURATION: float = 0.5  # seconds - balance between responsiveness and efficiency
+SAMPLE_RATE: int = 16000  # Hz - what speech models expect
 AUDIO_CHANNELS: int = 1  # mono
-AUDIO_BIT_DEPTH: int = 2  # 16-bit (2 bytes per sample)
 MAX_AUDIO_VALUE: float = 32767.0  # Maximum value for 16-bit audio
+MIN_DURATION_SECONDS: float = 0.4  # shorter clips can't hold a question
+SILENCE_PEAK: int = 60  # peak below this = mic blocked or muted
+TARGET_PEAK: int = 16000  # quiet recordings are boosted up to this level
+
+MIC_PERMISSION_HINT: str = ("Allow microphone access for your terminal in System Settings → "
+                            "Privacy & Security → Microphone, then restart the app.")
 
 
 class AudioHandler:
-    """Handles real-time audio recording and speech-to-text transcription.
-    
-    This class provides a simple interface for recording audio from the microphone
-    and converting it to text. Recording happens asynchronously in a background
-    thread to prevent blocking the UI. Audio data is stored in memory and transcribed
-    using Google's free speech recognition API when recording stops.
-    
-    The audio recording is done in chunks (default 0.5 seconds) which allows for
-    responsive stopping while maintaining good audio quality. Transcription uses
-    16kHz mono audio, standard for speech recognition models.
-    
+    """Records audio from the microphone and transcribes it.
+
     Attributes:
-        recognizer (sr.Recognizer): SpeechRecognition library recognizer instance
-        is_recording (bool): Flag indicating if recording is currently active
-        recording_thread (Optional[Thread]): Background thread handle for recording
-        audio_data (Optional[np.ndarray]): Raw audio data captured from microphone.
-            Shape: (num_samples, 1) as numpy array, values normalized to [-1, 1]
-            
+        transcriber (Transcriber): Speech-to-text engine (Whisper or Google)
+        is_recording (bool): Whether the microphone is currently recording
+        last_error (str): User-facing reason the most recent recording failed
+
     Example:
-        >>> handler = AudioHandler()
+        >>> handler = AudioHandler(config)
         >>> handler.start_recording()
-        >>> time.sleep(3)  # Record for 3 seconds
-        >>> text = handler.stop_recording()
-        >>> print(text)
-        'What is the weather today'
-        
-    Note:
-        - Requires internet connection for Google Speech Recognition API
-        - Audio must be at least 100ms for reliable recognition
-        - Recording can be stopped at any time by calling stop_recording()
+        >>> time.sleep(3)
+        >>> text, error = handler.stop_and_transcribe()
     """
 
-    def __init__(self) -> None:
-        """Initialize audio handler with speech recognizer.
-        
-        Sets up the SpeechRecognition library and initializes instance variables
-        for tracking recording state and storing audio data.
-        
-        Raises:
-            ImportError: If required audio libraries (sounddevice, SpeechRecognition)
-                are not installed
+    def __init__(self, config=None) -> None:
+        """Set up the recorder.
+
+        Args:
+            config: ConfigManager, used for the speech engine and Whisper model
+                settings. Optional; without it Whisper "small.en" is used.
         """
-        self.recognizer: sr.Recognizer = sr.Recognizer()
+        self.transcriber: Transcriber = Transcriber(config, SAMPLE_RATE)
         self.is_recording: bool = False
-        self.recording_thread: Optional[Thread] = None
-        self.audio_data: Optional[np.ndarray] = None
+        self.recording_thread: Optional[threading.Thread] = None
+        self.last_error: str = ""
+        # Each recording gets its own buffer so a new recording can never mix
+        # with one that's still being transcribed.
+        self._chunks: list = []
+        self._stream_error: Optional[str] = None
         logger.debug("AudioHandler initialized")
 
+    def preload(self) -> None:
+        """Load the speech model in the background so the first question is quick."""
+        self.transcriber.preload()
+
+    # ------------------------------------------------------------- recording
+
     def start_recording(self) -> None:
-        """Start recording audio in a background daemon thread.
-        
-        Launches a daemon thread that continuously records audio chunks until
-        stop_recording() is called. The daemon thread will not prevent the
-        application from exiting.
-        
-        Sets is_recording flag to True and starts the background recording
-        thread. Call stop_recording() to end the recording and process the audio.
-        
-        Side Effects:
-            - Sets is_recording to True
-            - Spawns background daemon thread
-            - Thread continues recording until stop_recording() is called
-            
-        Note:
-            Safe to call multiple times. If already recording, will be ignored
-            by the flag check in _record_audio.
-        """
+        """Start recording in a background thread. Returns immediately."""
+        if self.is_recording:
+            return
         self.is_recording = True
-        self.recording_thread = Thread(target=self._record_audio, daemon=True)
+        self._chunks = []
+        self._stream_error = None
+        self.recording_thread = threading.Thread(
+            target=self._record_audio, args=(self._chunks,), daemon=True)
         self.recording_thread.start()
         logger.info("Audio recording started")
 
-    def _record_audio(self) -> None:
-        """Record audio chunks in a background thread until stopped.
-        
-        Continuously captures audio in chunks using the sounddevice library,
-        storing each chunk in a list. When is_recording becomes False (via
-        stop_recording call), this function concatenates all chunks into a
-        single audio data array and returns.
-        
-        Audio is captured at SAMPLE_RATE (16kHz) in mono with chunks of
-        CHUNK_DURATION (0.5 seconds) size. This balance allows responsive
-        stopping while maintaining good audio quality.
-        
-        Side Effects:
-            - Populates self.audio_data with numpy array of audio samples
-            - Logs recording start/stop messages
-            - Logs errors if recording fails
-            
-        Raises:
-            Logs errors but does not raise exceptions (runs in daemon thread)
-            
-        Technical Details:
-            - sounddevice.rec() returns normalized float32 array [-1, 1]
-            - Each chunk has shape (chunk_size, 1) for mono audio
-            - Chunks are concatenated along first axis to create final audio
-        """
+    def _record_audio(self, chunks: list) -> None:
+        """Fill `chunks` from one continuous input stream until recording stops."""
+        def on_audio(indata, frames, time_info, status) -> None:
+            if status:
+                logger.debug(f"Audio input status: {status}")
+            chunks.append(indata.copy())
+
         try:
-            logger.debug("Recording thread started")
-            chunk_size: int = int(CHUNK_DURATION * SAMPLE_RATE)
-            chunks: list = []
-
-            # Record audio chunks until stopped
-            while self.is_recording:
-                # Capture audio chunk from microphone
-                audio_chunk: np.ndarray = sd.rec(
-                    chunk_size, 
-                    samplerate=SAMPLE_RATE, 
-                    channels=AUDIO_CHANNELS
-                )
-                sd.wait()  # Block until chunk is fully recorded
-                chunks.append(audio_chunk)
-
-            # Combine all chunks into single audio array
-            self.audio_data = np.concatenate(chunks) if chunks else None
-            logger.debug(
-                f"Recording stopped. Total samples: {len(self.audio_data) if self.audio_data is not None else 0}"
-            )
-            
+            with sd.InputStream(samplerate=SAMPLE_RATE, channels=AUDIO_CHANNELS,
+                                dtype="int16", callback=on_audio):
+                while self.is_recording:
+                    sd.sleep(30)
         except Exception as e:
             logger.error(f"Error in recording thread: {e}", exc_info=True)
-            self.audio_data = None
+            self._stream_error = ("Couldn't open the microphone. Check that one is connected. "
+                                  + MIC_PERMISSION_HINT)
 
-    def stop_recording(self) -> str:
-        """Stop recording and transcribe audio to text using Google Speech Recognition.
-        
-        Stops the recording thread, joins it, and processes the captured audio data.
-        Converts the audio to the format expected by the speech recognition API and
-        sends it to Google's free speech recognition service for transcription.
-        
-        Returns:
-            str: Transcribed text from the audio. On error, returns an error message
-                describing what went wrong (e.g., "Could not understand audio").
-                
-        Side Effects:
-            - Sets is_recording to False
-            - Joins recording thread (blocks until thread finishes)
-            - Clears audio_data after processing
-            
-        Raises:
-            Does not raise exceptions. All errors are caught and returned as
-            string messages for user display.
-            
-        Error Handling:
-            - No audio recorded: Returns "No audio recorded"
-            - Audio too quiet/unclear: Returns "Could not understand audio"
-            - Network error: Returns "Error with Google API: {error}"
-            - Other errors: Returns "Error: {error}"
-            
-        Technical Details:
-            Audio conversion pipeline:
-            1. Retrieve stored audio_data (normalized float [-1, 1])
-            2. Convert to int16 (multiply by 32767 to scale to [-32767, 32767])
-            3. Convert to bytes for sr.AudioData
-            4. Create sr.AudioData object with sample rate and bit depth
-            5. Send to Google API via sr.Recognizer.recognize_google()
-            
-        Note:
-            Requires internet connection for Google Speech Recognition API.
-            Google's free API has rate limits (typically 50 requests/day).
-        """
+    def _finish_recording(self) -> Tuple[Optional[np.ndarray], Optional[str]]:
+        """Stop the stream and return (audio, error) for this recording only."""
         self.is_recording = False
-        
-        # Wait for recording thread to finish
-        if self.recording_thread:
-            self.recording_thread.join()
-            logger.debug("Recording thread joined")
+        thread, chunks = self.recording_thread, self._chunks
+        if thread:
+            thread.join()
+        if self._stream_error:
+            return None, self._stream_error
+        if not chunks:
+            return None, "No audio was recorded."
+        return np.concatenate(chunks).reshape(-1), None
 
-        # Handle case where no audio was recorded
-        if self.audio_data is None:
-            logger.warning("stop_recording called but no audio data captured")
-            return "No audio recorded"
+    # --------------------------------------------------------- transcription
+
+    def stop_and_transcribe(self) -> Tuple[str, str]:
+        """Stop recording and transcribe it.
+
+        Returns:
+            (text, error): text is what was said ("" if nothing usable was
+            heard); error is a short, user-facing reason when text is "".
+        """
+        audio, error = self._finish_recording()
+        if audio is None:
+            return self._fail(error)
+
+        samples = audio.astype(np.int32)
+        duration: float = len(samples) / SAMPLE_RATE
+        peak: int = int(np.abs(samples).max()) if len(samples) else 0
+        logger.debug(f"Captured {duration:.1f}s of audio, peak level {peak}")
+
+        if duration < MIN_DURATION_SECONDS:
+            return self._fail("That was too short. Hold on a moment after you start talking.")
+        if peak < SILENCE_PEAK:
+            logger.warning(f"Recording was silent (peak {peak})")
+            return self._fail("The microphone recorded silence. " + MIC_PERMISSION_HINT)
+
+        # Boost quiet recordings so the recognizer has something to work with
+        if peak < TARGET_PEAK:
+            samples = samples * (TARGET_PEAK / peak)
+        audio_int16 = np.clip(samples, -MAX_AUDIO_VALUE, MAX_AUDIO_VALUE).astype(np.int16)
 
         try:
-            logger.debug("Beginning audio transcription...")
-            
-            # Convert normalized float audio [-1, 1] to int16 [-32767, 32767]
-            audio_int16: np.ndarray = np.int16(self.audio_data * MAX_AUDIO_VALUE)
-            audio_bytes: bytes = audio_int16.tobytes()
-
-            # Create AudioData object for speech_recognition library
-            # sr.AudioData(bytes, sample_rate, sample_width_in_bytes)
-            audio_data_obj: sr.AudioData = sr.AudioData(
-                audio_bytes, 
-                SAMPLE_RATE, 
-                AUDIO_BIT_DEPTH
-            )
-
-            # Send to Google's free speech recognition API
-            text: str = self.recognizer.recognize_google(audio_data_obj)
-            logger.info(f"Transcription successful: {text[:50]}...")
-            return text
-            
-        except sr.UnknownValueError:
-            # Google API could not understand the audio
-            logger.warning("Speech recognition failed: audio unclear")
-            return "Could not understand audio"
-            
-        except sr.RequestError as e:
-            # Network error or Google API issue
-            logger.error(f"Google Speech Recognition API error: {e}", exc_info=True)
-            return f"Error with Google API: {e}"
-            
+            text, engine = self.transcriber.transcribe(audio_int16)
+        except TranscriptionError as e:
+            return self._fail(str(e))
         except Exception as e:
-            # Unexpected error during transcription
             logger.error(f"Unexpected transcription error: {e}", exc_info=True)
-            return f"Error: {e}"
+            return self._fail("Something went wrong while transcribing.")
+
+        if not text:
+            logger.warning("Speech recognition failed: audio unclear")
+            return self._fail("Sorry, I didn't catch that. Try again a little closer to the mic.")
+        logger.info(f"Transcribed with {engine}: {text[:50]}...")
+        self.last_error = ""
+        return text, ""
+
+    def stop_recording(self) -> str:
+        """Stop recording and return the text ("" on failure; see `last_error`)."""
+        text, _error = self.stop_and_transcribe()
+        return text
+
+    def _fail(self, message: str) -> Tuple[str, str]:
+        self.last_error = message
+        logger.warning(message)
+        return "", message

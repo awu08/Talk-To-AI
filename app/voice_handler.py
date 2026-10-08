@@ -1,255 +1,267 @@
-"""Voice Handler: Text-to-speech synthesis and audio output.
+"""Voice Handler: Speaks AI responses aloud, and can be interrupted.
 
-This module provides text-to-speech functionality for the Talk-To-AI application,
-allowing AI responses to be spoken aloud to the user. Uses the pyttsx3 library
-which provides cross-platform TTS support (works on macOS, Windows, Linux).
+On macOS speech uses the built-in `say` command, which can be stopped the
+instant you want: from the Stop button, by pressing the stop hotkey, or by
+starting a new question. Other systems use pyttsx3.
 
-Voice output respects user configuration settings (voice name, speed) and can
-be disabled via the response_mode.voice setting. Handles voice synthesis errors
-gracefully with informative logging.
+Settings used:
+    voice.voice_name: voice to use ("" = system default)
+    voice.speed: 0.5–2.0 multiplier
+    response_mode.voice: speak at all?
 
 Author: Allen Wu
-Version: 1.0.0
+Version: 1.1.0
 """
 
 import logging
-from typing import Optional, List
-import pyttsx3
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+from typing import Callable, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Text-to-speech configuration constants
-DEFAULT_SPEECH_RATE: int = 150  # Words per minute base rate
-SPEECH_RATE_MIN: int = 75  # Minimum WPM (speed slider minimum 50% = 75 WPM)
-SPEECH_RATE_MAX: int = 300  # Maximum WPM (speed slider maximum 200% = 300 WPM)
+IS_MAC: bool = sys.platform == "darwin"
 
-# Default voice configuration
-DEFAULT_VOICE_NAME: str = "Alex"
+
+def _say_path() -> str:
+    """Full path to macOS's `say`, so it works even if PATH is missing /usr/bin."""
+    return "/usr/bin/say" if os.path.exists("/usr/bin/say") else (shutil.which("say") or "say")
+
+# Speaking rates in words per minute at speed 1.0
+MAC_SPEECH_RATE: int = 185      # macOS `say`
+DEFAULT_SPEECH_RATE: int = 150  # pyttsx3
+SPEECH_RATE_MIN: int = 75
+SPEECH_RATE_MAX: int = 400
+
+DEFAULT_VOICE_NAME: str = ""  # "" means the system's default voice
+
+# macOS novelty/effect voices that make poor assistant voices
+NOVELTY_VOICES = {
+    "albert", "bad news", "bahh", "bells", "boing", "bubbles", "cellos",
+    "good news", "jester", "organ", "superstar", "trinoids", "whisper",
+    "wobble", "zarvox", "deranged", "hysterical", "pipe organ",
+}
+
+
+class _Voice:
+    """Minimal voice record (name, languages, id) shared by both engines."""
+
+    def __init__(self, name: str, languages: list, voice_id: str) -> None:
+        self.name, self.languages, self.id = name, languages, voice_id
+
+
+def _is_english(voice) -> bool:
+    return any(str(lang).lower().replace("-", "_").startswith("en")
+               for lang in (voice.languages or []) if lang)
+
+
+def _installed_voices() -> List[_Voice]:
+    """All voices on this computer."""
+    if IS_MAC:
+        try:
+            out = subprocess.run([_say_path(), "-v", "?"], capture_output=True, text=True,
+                                 timeout=10).stdout
+        except Exception as e:
+            logger.error(f"Couldn't list macOS voices: {e}")
+            return []
+        voices = []
+        for line in out.splitlines():
+            # e.g. "Eddy (English (US))   en_US    # Hello! My name is Eddy."
+            match = re.match(r"^(.+?)\s+([a-z]{2,3}[_-][A-Za-z0-9]{2,4})\s+#", line)
+            if match:
+                voices.append(_Voice(match.group(1).strip(), [match.group(2)],
+                                     match.group(1).strip()))
+        return voices
+    try:
+        import pyttsx3
+        return [_Voice(v.name or "", list(v.languages or []), v.id)
+                for v in pyttsx3.init().getProperty("voices")]
+    except Exception as e:
+        logger.error(f"Couldn't list voices: {e}")
+        return []
+
+
+def list_voices() -> List[str]:
+    """Names of installed English voices worth offering (novelty voices left out)."""
+    names, seen = [], set()
+    for voice in sorted(_installed_voices(), key=lambda v: v.name.lower()):
+        if not voice.name or voice.name.lower() in NOVELTY_VOICES or voice.name in seen:
+            continue
+        if voice.languages and not _is_english(voice):
+            continue
+        seen.add(voice.name)
+        names.append(voice.name)
+    return names
+
+
+def find_voice(voice_name: str, voices: List) -> Optional[str]:
+    """Return the id of the best match for `voice_name`, or None for system default.
+
+    Tries an exact name, then an English "Name (…)" variant (e.g. "Eddy" →
+    "Eddy (English (US))"), then any name containing it.
+    """
+    wanted = (voice_name or "").strip().lower()
+    if not wanted:
+        return None
+    for voice in voices:
+        if (voice.name or "").lower() == wanted:
+            return voice.id
+    variants = [v for v in voices if (v.name or "").lower().startswith(wanted + " (")]
+    variants.sort(key=lambda v: not _is_english(v))
+    if variants:
+        return variants[0].id
+    for voice in voices:
+        if wanted in (voice.name or "").lower():
+            return voice.id
+    logger.warning(f"Voice '{voice_name}' isn't installed; using the system default. "
+                   "Pick another voice in Settings → Voice.")
+    return None
+
+
+def clean_for_speech(text: str) -> str:
+    """Strip Markdown symbols so they aren't read aloud."""
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)          # code blocks
+    text = re.sub(r"`([^`]*)`", r"\1", text)                    # inline code
+    text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)      # links → their text
+    text = re.sub(r"^\s{0,3}#{1,6}\s*", "", text, flags=re.M)   # headings
+    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.M)        # bullets
+    text = re.sub(r"(\*\*|__|\*|_)(\S.*?\S|\S)\1", r"\2", text)  # bold / italics
+    return re.sub(r"[ \t]+", " ", text).strip()
 
 
 class VoiceHandler:
-    """Handles text-to-speech synthesis and audio playback.
-    
-    This class provides a simple interface for converting text to speech and
-    playing it through the system audio output. It uses pyttsx3, a Python
-    text-to-speech library that works on macOS, Windows, and Linux.
-    
-    Voice output is configurable through the ConfigManager:
-    - voice.voice_name: Which voice to use (e.g., "Alex", "Victoria")
-    - voice.speed: Speech speed multiplier (0.5 = 50%, 1.0 = 100%, 2.0 = 200%)
-    - response_mode.voice: Enable/disable voice responses
-    
-    Voice Synthesis Process:
-    1. Check if voice response is enabled in settings
-    2. Load voice name and speed from configuration
-    3. Find matching system voice by name
-    4. Set voice and speech rate on pyttsx3 engine
-    5. Synthesize and play audio through system speakers
-    
-    Available Voices (macOS):
-        - Alex (default male voice)
-        - Victoria (female voice)
-        - Moira (female voice with Irish accent)
-        - Fiona (female voice)
-        Note: Available voices vary by OS. Windows has different voices.
-    
+    """Speaks text aloud; `stop()` cuts it off immediately.
+
     Attributes:
-        config (ConfigManager): Configuration manager for voice settings
-        engine (pyttsx3.Engine): pyttsx3 text-to-speech engine instance
-        
-    Features:
-    - Cross-platform support (macOS, Windows, Linux)
-    - Configurable voice selection
-    - Configurable speech rate (50-200%)
-    - Can be disabled via settings
-    - Graceful error handling with logging
-    
+        config (ConfigManager): Provides voice settings
+        on_state_change (Optional[Callable[[bool], None]]): Called with True when
+            speech starts and False when it ends or is stopped. May be called
+            from a background thread.
+
     Example:
-        >>> from app.config import ConfigManager
-        >>> config = ConfigManager()
-        >>> voice = VoiceHandler(config)
-        >>> voice.speak("Hello, world!")
-        >>> # Audio plays at configured voice and speed
-        
-    Technical Details:
-        Speech rate is converted from a multiplier (0.5-2.0) to words per minute:
-        - 0.5x speed: 75 WPM (minimum)
-        - 1.0x speed: 150 WPM (default)
-        - 2.0x speed: 300 WPM (maximum)
-        
-    Note:
-        - Blocks while speaking. Audio plays synchronously.
-        - All errors are logged but not raised (graceful degradation)
-        - Voice availability depends on OS and installed voices
+        >>> handler = VoiceHandler(config)
+        >>> threading.Thread(target=handler.speak, args=("Hello there",)).start()
+        >>> handler.stop()  # from anywhere, e.g. a Stop button
     """
 
     def __init__(self, config) -> None:
-        """Initialize the text-to-speech engine with configuration.
-        
-        Creates a pyttsx3 TTS engine instance and loads voice configuration
-        from the ConfigManager. The engine is ready to use immediately after
-        initialization.
-        
-        Args:
-            config: ConfigManager instance providing voice settings
-                (voice.voice_name, voice.speed, response_mode.voice)
-            
-        Side Effects:
-            - Initializes pyttsx3 engine (may start background processes)
-            - Loads system voices list
-            - Logs initialization message
-            
-        Raises:
-            RuntimeError: If pyttsx3 cannot initialize (rare, indicates
-                system TTS subsystem issue)
-                
-        Note:
-            Engine initialization is usually fast, but on some systems it may
-            take a moment as it initializes the underlying TTS subsystem.
-        """
-        try:
-            self.config = config
-            self.engine: pyttsx3.Engine = pyttsx3.init()
-            logger.info("Voice handler initialized with pyttsx3 TTS engine")
-        except Exception as e:
-            logger.error(f"Failed to initialize text-to-speech engine: {e}", exc_info=True)
-            raise
+        self.config = config
+        self.on_state_change: Optional[Callable[[bool], None]] = None
+        self._lock = threading.Lock()
+        self._process: Optional[subprocess.Popen] = None
+        self._engine = None
+        self._speaking: bool = False
+        self._stop_count: int = 0  # bumps on every stop(); lets speech notice it was cancelled
+        self._say_broken: bool = False
+        self._default_voice_id: Optional[str] = None
+        if not IS_MAC:
+            self._init_pyttsx3()
+        logger.info("Voice handler initialized (%s)", "macOS say" if IS_MAC else "pyttsx3")
+
+    @property
+    def is_speaking(self) -> bool:
+        return self._speaking
 
     def speak(self, text: str) -> None:
-        """Synthesize and play text as speech through system audio.
-        
-        Converts the provided text to speech using the configured voice and
-        speech rate, then plays it through the system audio output. Respects
-        the user's voice response setting - does nothing if voice output is
-        disabled.
-        
-        This method blocks until the audio finishes playing (synchronous).
-        Speech rate is applied as a multiplier of the base rate.
-        
-        Args:
-            text (str): The text to synthesize and speak aloud. Can be any
-                length, but longer text will take longer to synthesize and play.
-                
-        Side Effects:
-            - Synthesizes audio (CPU usage spike)
-            - Plays audio through system speakers
-            - Blocks until audio finishes playing
-            - Logs debug and error messages
-            
-        Raises:
-            Does not raise exceptions. All errors are logged and the method
-            returns gracefully.
-            
-        Configuration Used:
-            - voice.voice_name: Name of voice to use (e.g., "Alex")
-            - voice.speed: Speech rate multiplier (0.5-2.0)
-            - response_mode.voice: Whether voice output is enabled
-            
-        Example:
-            >>> voice_handler.speak("The weather today is sunny.")
-            >>> # Audio plays at configured voice and speed
-            >>> # Method blocks until audio finishes
-            
-        Note:
-            - Blocks synchronously (audio plays before method returns)
-            - Very long text may take significant time to synthesize
-            - Voice availability depends on operating system
+        """Speak `text`, blocking until finished or stopped. Run it off the UI thread.
+
+        Any speech already playing is stopped first.
         """
+        if self.config.get("response_mode", "voice") is False:
+            logger.debug("Voice response disabled in settings, skipping synthesis")
+            return
+        text = clean_for_speech(text)
+        if not text:
+            return
+        self.stop()
+        with self._lock:
+            ticket = self._stop_count
+
+        voice_name: str = self.config.get("voice", "voice_name") or DEFAULT_VOICE_NAME
+        speed: float = self.config.get("voice", "speed") or 1.0
         try:
-            # Check if voice response is enabled in configuration
-            if not self.config.get("response_mode", "voice"):
-                logger.debug("Voice response disabled in settings, skipping synthesis")
-                return
-
-            # Load voice settings from configuration
-            voice_name: Optional[str] = self.config.get("voice", "voice_name")
-            speed: Optional[float] = self.config.get("voice", "speed")
-            
-            # Use defaults if not configured
-            if not voice_name:
-                voice_name = DEFAULT_VOICE_NAME
-            if not speed:
-                speed = 1.0
-
-            logger.debug(f"Synthesizing speech: voice={voice_name}, speed={speed}x")
-
-            # Find and set the requested voice
-            voices: List = self.engine.getProperty("voices")
-            voice_id: Optional[str] = self._find_voice_id(voice_name, voices)
-            if voice_id:
-                self.engine.setProperty("voice", voice_id)
-
-            # Convert speed multiplier (0.5-2.0) to words per minute
-            # Base rate is 150 WPM, so 1.0x speed = 150 WPM
-            speech_rate: int = int(speed * DEFAULT_SPEECH_RATE)
-            speech_rate = max(SPEECH_RATE_MIN, min(SPEECH_RATE_MAX, speech_rate))
-            self.engine.setProperty("rate", speech_rate)
-            
-            logger.debug(f"Speech rate set to {speech_rate} WPM")
-
-            # Synthesize and play audio (blocks until complete)
-            self.engine.say(text)
-            self.engine.runAndWait()
-
-            logger.info(f"Spoke: {text[:50]}..." if len(text) > 50 else f"Spoke: {text}")
-
+            self._set_speaking(True)
+            if IS_MAC and not self._say_broken:
+                try:
+                    self._speak_mac(text, voice_name, speed, ticket)
+                    return
+                except OSError as e:
+                    # `say` couldn't start; use pyttsx3 from now on (not interruptible)
+                    logger.error(f"Couldn't run macOS 'say' ({e}); falling back to pyttsx3")
+                    self._say_broken = True
+            self._speak_pyttsx3(text, voice_name, speed)
         except Exception as e:
             logger.error(f"Error during text-to-speech synthesis: {e}", exc_info=True)
+        finally:
+            self._set_speaking(False)
 
-    def _find_voice_id(self, voice_name: str, voices: List) -> Optional[str]:
-        """Find the voice ID matching the requested voice name.
-        
-        Searches the available system voices for a voice matching the requested
-        name. Uses case-insensitive substring matching to be flexible with
-        voice names (e.g., "alex" matches "Alex", "Alex (Enhanced)", etc.).
-        
-        Args:
-            voice_name (str): Requested voice name (e.g., "Alex", "Victoria")
-            voices (List): List of available voice objects from pyttsx3
-            
-        Returns:
-            Optional[str]: The voice ID if a match is found, None if no matching
-                voice is available. Returns None gracefully rather than raising.
-                
-        Side Effects:
-            - Logs debug message if voice found
-            - Logs warning if voice not found
-            
-        Raises:
-            Does not raise exceptions. Returns None if voice not found.
-            
-        Voice Matching:
-            Uses case-insensitive substring matching. For example:
-            - "alex" matches "Alex"
-            - "victoria" matches "Victoria"
-            - "moira" matches "Moira (Enhanced)"
-            
-        Example:
-            >>> voices = engine.getProperty('voices')
-            >>> voice_id = handler._find_voice_id("Alex", voices)
-            >>> if voice_id:
-            ...     engine.setProperty('voice', voice_id)
-            
-        Note:
-            Available voices depend on the operating system:
-            - macOS: Alex, Victoria, Moira, Fiona, etc.
-            - Windows: David, Zira, Mark (and others from installed TTS engines)
-            - Linux: Depends on installed espeak or other TTS backends
-        """
+    def stop(self) -> None:
+        """Stop speaking right away. Safe to call from any thread, any time."""
+        with self._lock:
+            self._stop_count += 1
+            process, self._process = self._process, None
+        if process and process.poll() is None:
+            process.terminate()
+            logger.info("Speech stopped")
+        if self._engine is not None and self._speaking:
+            try:
+                self._engine.stop()
+            except Exception:
+                pass
+
+    # -------------------------------------------------------------- engines
+
+    def _speak_mac(self, text: str, voice_name: str, speed: float, ticket: int) -> None:
+        rate = max(SPEECH_RATE_MIN, min(SPEECH_RATE_MAX, int(MAC_SPEECH_RATE * speed)))
+        command = [_say_path(), "-r", str(rate)]
+        voice_id = find_voice(voice_name, _installed_voices()) if voice_name else None
+        if voice_id:
+            command += ["-v", voice_id]
+        process = subprocess.Popen(command, stdin=subprocess.PIPE, text=True)
+        with self._lock:
+            if self._stop_count != ticket:  # stop() arrived while we were starting
+                process.kill()
+                return
+            self._process = process
         try:
-            for voice in voices:
-                # Case-insensitive substring matching for flexibility
-                if voice_name.lower() in voice.name.lower():
-                    logger.debug(f"Found matching voice: '{voice.name}'")
-                    return voice.id
-            
-            # No matching voice found
-            logger.warning(
-                f"Requested voice '{voice_name}' not found. Available voices: "
-                f"{[v.name for v in voices]}"
-            )
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error finding voice: {e}", exc_info=True)
-            return None
+            try:
+                process.communicate(text)  # text via stdin: no length or quoting limits
+            except (BrokenPipeError, OSError):
+                pass  # stopped while the text was still being sent
+        finally:
+            with self._lock:
+                if self._process is process:
+                    self._process = None
+        logger.info(f"Spoke: {text[:50]}...")
+
+    def _init_pyttsx3(self):
+        if self._engine is None:
+            import pyttsx3
+            self._engine = pyttsx3.init()
+            self._default_voice_id = self._engine.getProperty("voice")
+        return self._engine
+
+    def _speak_pyttsx3(self, text: str, voice_name: str, speed: float) -> None:
+        engine = self._init_pyttsx3()
+        voice_id = find_voice(voice_name, engine.getProperty("voices")) or self._default_voice_id
+        if voice_id:
+            engine.setProperty("voice", voice_id)
+        rate = max(SPEECH_RATE_MIN, min(SPEECH_RATE_MAX, int(DEFAULT_SPEECH_RATE * speed)))
+        engine.setProperty("rate", rate)
+        engine.say(text)
+        engine.runAndWait()
+        logger.info(f"Spoke: {text[:50]}...")
+
+    def _set_speaking(self, speaking: bool) -> None:
+        if self._speaking == speaking:
+            return
+        self._speaking = speaking
+        if self.on_state_change:
+            try:
+                self.on_state_change(speaking)
+            except Exception as e:
+                logger.error(f"Error in speech state callback: {e}", exc_info=True)

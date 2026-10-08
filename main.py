@@ -11,6 +11,7 @@ Version: 1.0.0
 
 import sys
 import logging
+import threading
 from typing import Optional
 from PyQt6.QtWidgets import QApplication
 
@@ -22,6 +23,7 @@ from app.ai_handler import AIHandler
 from app.voice_handler import VoiceHandler
 from app.response_display import ResponseDisplay
 from app.settings_panel import SettingsPanel
+from app.theme import apply_theme
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +58,7 @@ class VoiceAssistant:
         try:
             # Initialize core managers
             self.config: ConfigManager = ConfigManager()
-            self.audio_handler: AudioHandler = AudioHandler()
+            self.audio_handler: AudioHandler = AudioHandler(self.config)
             self.ai_handler: AIHandler = AIHandler(self.config)
             self.voice_handler: VoiceHandler = VoiceHandler(self.config)
             self.response_display: ResponseDisplay = ResponseDisplay(self.config)
@@ -72,67 +74,120 @@ class VoiceAssistant:
                 self.ai_handler
             )
             self.menu_bar.settings_panel = self.settings_panel
+
+            # State shared between the hotkey thread and answer workers
+            self._state_lock = threading.Lock()
+            self._recording: bool = False
+            self._question_id: int = 0
+
+            # Stopping speech from the UI, and showing when it's talking
+            self.response_display.on_stop_speaking = self.stop_speaking
+            self.menu_bar.on_stop_speaking = self.stop_speaking
+            self.voice_handler.on_state_change = self._on_speaking_changed
+
+            # Load the speech model now so the first question isn't slow
+            self.audio_handler.preload()
             
             logger.debug("VoiceAssistant initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize VoiceAssistant: {e}")
             raise
 
+    # The hotkey callbacks below run on the hotkey listener's thread. They
+    # return right away and hand slow work (transcribing, asking the AI,
+    # speaking) to a worker thread, so hotkeys keep working while it talks.
+
     def on_recording_started(self) -> None:
-        """Handle hotkey press to start recording.
-        
-        Called when the user presses the start hotkey. Changes the menu bar icon
-        to indicate recording is active and begins capturing audio.
-        
-        Side Effects:
-            - Changes menu bar icon to unmuted state
-            - Starts audio recording in background thread
+        """Start hotkey: stop any answer in progress and start listening.
+
+        Pressing it while the assistant is talking (or still thinking) cuts the
+        old answer off; only the new question will be answered.
         """
-        logger.debug("Recording started via hotkey")
+        with self._state_lock:
+            if self._recording:
+                return
+            self._recording = True
+            self._question_id += 1  # anything still working on an older question is now stale
+        self.voice_handler.stop()
         self.menu_bar.change_icon("unmuted_microphone.png")
         self.audio_handler.start_recording()
+        logger.debug("Recording started via hotkey")
 
     def on_recording_stopped(self) -> None:
-        """Handle hotkey release to process the recording.
-        
-        Called when the user presses the stop hotkey. Orchestrates the complete
-        pipeline: transcription → AI processing → voice response. Handles errors
-        gracefully and always resets the menu bar icon.
-        
+        """Stop hotkey: send the recording, or, if not recording, stop talking."""
+        with self._state_lock:
+            if not self._recording:
+                stop_speaking = True
+            else:
+                stop_speaking = False
+                self._recording = False
+                question_id = self._question_id
+        if stop_speaking:
+            self.stop_speaking()
+            return
+        threading.Thread(target=self._answer, args=(question_id,), daemon=True).start()
+
+    def _on_speaking_changed(self, speaking: bool) -> None:
+        """Called from the speaking thread; both targets hop to the UI thread."""
+        self.response_display.set_speaking_async(speaking)
+        self.menu_bar.set_speaking(speaking)
+
+    def stop_speaking(self) -> None:
+        """Stop the spoken answer now (Stop button, stop hotkey, Done)."""
+        self.voice_handler.stop()
+
+    def _is_current(self, question_id: int) -> bool:
+        return question_id == self._question_id
+
+    def _answer(self, question_id: int) -> None:
+        """Worker thread: transcribe → ask the AI → show and speak the answer.
+
         Pipeline:
-            1. Stop recording and transcribe audio
-            2. Send transcribed text to selected AI provider
-            3. Speak the AI response (if enabled)
-            4. Display response popup (if enabled)
-            5. Reset menu bar icon
-            
-        Side Effects:
-            - Stops audio recording
-            - Sends request to AI API
-            - Plays audio response
-            - Resets menu bar icon (always in finally block)
+            1. Stop recording and transcribe (Whisper on this computer by default)
+            2. Show the question with "Thinking…" (if the popup is enabled)
+            3. Send it to the selected AI provider
+            4. Show the answer, then speak it (if enabled)
+        Each step checks the question is still the latest one; if a new
+        question was started meanwhile, this one quietly gives up.
         """
         try:
-            # Step 1: Capture and transcribe audio
-            transcribed_text: str = self.audio_handler.stop_recording()
-            logger.info(f"Audio transcribed: {transcribed_text[:50]}...")
+            text, error = self.audio_handler.stop_and_transcribe()
+            self.menu_bar.change_icon("muted_microphone.png")
+            if not self._is_current(question_id):
+                return
+            if not text:
+                # Nothing usable was heard: tell the user instead of asking the AI
+                self.response_display.request_response(error)
+                return
+            logger.info(f"Audio transcribed: {text[:50]}...")
 
-            # Step 2: Send to AI provider and get response
-            ai_response: str = self.ai_handler.send_prompt(transcribed_text)
+            self.response_display.request_thinking(text)
+            try:
+                ai_response: str = self.ai_handler.send_prompt(text)
+            except Exception as e:
+                if self._is_current(question_id):
+                    self.response_display.request_response(self._ai_error_message(e), text)
+                return
             logger.info(f"AI response received: {ai_response[:50]}...")
+            if not self._is_current(question_id):
+                return
 
-            # Step 3: Speak the response (respects voice settings)
+            # Show first, so the text is on screen while it's being spoken
+            self.response_display.request_response(ai_response, text)
             self.voice_handler.speak(ai_response)
-
-            # Step 4: Display response (respects popup settings)
-            # TODO: Implement on main thread to avoid threading issues
-            # self.response_display.show_response(ai_response)
-
         except Exception as e:
             logger.error(f"Error processing recording: {e}", exc_info=True)
-        finally:
-            # Always reset menu bar icon regardless of success/failure
             self.menu_bar.change_icon("muted_microphone.png")
+
+    def _ai_error_message(self, error: Exception) -> str:
+        """Turn an AI failure into a short message the user can act on."""
+        if isinstance(error, ValueError) and "API key" in str(error):
+            return "Add your API key in **Settings → AI Model** to get answers."
+        if isinstance(error, ValueError) and "Model" in str(error):
+            return "Choose a model in **Settings → AI Model** to get answers."
+        provider = self.config.get("api", "provider") or "the AI provider"
+        return (f"Couldn't get an answer from {provider}. Check your internet "
+                f"connection, API key and model name.\n\n`{str(error)[:200]}`")
 
     def run(self, app: QApplication) -> None:
         """Start the application and event loops.
@@ -182,6 +237,9 @@ def main() -> None:
     """
     try:
         app: QApplication = QApplication(sys.argv)
+        app.setApplicationName("Talk-To-AI")
+        app.setQuitOnLastWindowClosed(False)  # menu bar app: keep running with no windows
+        apply_theme(app)
         assistant: VoiceAssistant = VoiceAssistant()
         assistant.run(app)
     except Exception as e:

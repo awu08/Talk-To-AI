@@ -23,22 +23,21 @@ Keyboard shortcuts on your device activate the app and a chosen LLM, which then 
 - [x] Audio recording and transcription pipeline
 - [x] Response display modes (voice, popup, or both)
 - [x] Settings window with close button fix
+- [x] Custom hotkey recording + UI
+- [x] UI polishing and visual improvements
 
 ## In Progress
 
-- [ ] Custom hotkey recording UI (currently read-only in settings)
-- [ ] Save settings as default with reset option (partially implemented)
-- [ ] UI polishing and visual improvements
+- [ ] Context awareness (clipboard, browser content)
+- [ ] Create a proper app version
 
 ## Planned Features
 
 - [ ] Offline mode with local LLMs fallback
-- [ ] Context awareness (clipboard, browser content)
 - [ ] Persistent conversation history across sessions
 - [ ] Windows/Linux support
 - [ ] Packaged .app distribution (PyInstaller)
 - [ ] Streaming AI responses
-- [ ] Custom hotkey UI recording
 - [ ] Multi-app session management
 
 ## Technical Architecture

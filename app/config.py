@@ -148,7 +148,7 @@ class ConfigManager:
                 {
                     "hotkeys": {"start": "cmd+option+space", "stop": "esc"},
                     "api": {"provider": "", "model": "", "api_key": ""},
-                    "voice": {"speed": 1.0, "voice_name": "Alex"},
+                    "voice": {"speed": 1.0, "voice_name": ""},
                     "response_mode": {"voice": True, "popup": True}
                 }
                 
@@ -166,9 +166,13 @@ class ConfigManager:
                 "model": "",
                 "api_key": ""
             },
+            "speech": {
+                "engine": "whisper",   # "whisper" (on this computer) or "google"
+                "model": "small.en"    # Whisper size: base.en, small.en, medium.en
+            },
             "voice": {
                 "speed": 1.0,
-                "voice_name": "Alex"
+                "voice_name": ""  # "" = system default voice
             },
             "response_mode": {
                 "voice": True,

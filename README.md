@@ -9,9 +9,11 @@ A macOS desktop voice assistant that brings Claude, ChatGPT, or Gemini to your f
 ## Features
 
 - **Global Hotkey** — Press `cmd+option+space` (customizable) from anywhere to activate
-- **Voice Input** — Speak naturally; Google Whisper transcribes automatically
+- **Voice Input** — Speak naturally; Whisper transcribes it right on your Mac (free and offline), with Google as a backup
 - **Multi-AI Support** — Choose between Claude, ChatGPT, or Gemini APIs
 - **Voice Response** — AI answers spoken aloud with customizable voice and speed
+- **Right-sized answers** — Quick questions get a sentence or two; harder ones get only as much as they need
+- **Interruptible** — Press `esc`, click Stop or Done, or just ask a new question to cut the voice off
 - **Conversation History** — Maintain context across multiple queries
 - **Menu Bar Integration** — Minimal UI; lives in your system tray
 - **Real-Time Settings** — Configure hotkeys, API keys, voice settings on-the-fly
@@ -52,10 +54,10 @@ pip install -r requirements.txt
 ```
 
 3. **Configure in Settings:**
-   - Click system tray icon → Settings
+   - Click the menu bar microphone → Settings
    - Enter your API key
    - Select AI provider and model
-   - Customize hotkeys and voice settings
+   - Customize hotkeys (click a shortcut under General and press your new combo) and voice settings
 
 ## Usage
 
@@ -63,6 +65,9 @@ pip install -r requirements.txt
 2. **Speak your question** — Microphone activates
 3. **Press stop hotkey** (default: `esc`)
 4. **AI responds** — Voice plays + optional popup
+5. **Stop it anytime** — press `esc` again, click **Stop speaking**, or press the start hotkey to ask something new
+
+The first launch downloads the Whisper speech model once (about 500 MB for the default size; change it in Settings → Voice).
 
 ## Project Structure
 
@@ -73,13 +78,16 @@ pip install -r requirements.txt
 
 ### App Module (`app/`)
 - **config.py** — Settings management (stores in ~/.talktoai/settings.json)
-- **menu_bar.py** — System tray icon and UI menu
+- **menu_bar.py** — Menu bar icon and dropdown popover (status, quick toggles, Settings/Quit)
 - **hotkey_listener.py** — Global keyboard hotkey detection
-- **audio_handler.py** — Audio recording and Google speech-to-text transcription
+- **audio_handler.py** — Microphone recording and audio checks
+- **transcriber.py** — Speech-to-text: local Whisper, with Google as backup
 - **ai_handler.py** — AI API routing (Claude, ChatGPT, Gemini)
-- **voice_handler.py** — Text-to-speech synthesis with pyttsx3
-- **settings_panel.py** — Settings configuration window
-- **response_display.py** — AI response popup window
+- **voice_handler.py** — Interruptible text-to-speech
+- **settings_panel.py** — Settings window with sidebar sections (General, AI Model, Voice)
+- **response_display.py** — Floating response panel with Markdown, Copy and Done
+- **theme.py** — Shared dark theme: colors, fonts, icons and stylesheet
+- **widgets.py** — Reusable UI pieces (toggle switch, cards, setting rows, keycaps)
 
 ## Technology Stack
 
@@ -88,9 +96,9 @@ pip install -r requirements.txt
 | **Desktop UI** | PyQt6 |
 | **Hotkey Detection** | pynput |
 | **Audio Capture** | sounddevice, numpy |
-| **Speech Recognition** | Google Speech-to-Text |
+| **Speech Recognition** | Whisper via faster-whisper (local), Google Speech-to-Text (backup) |
 | **AI Providers** | Anthropic SDK, OpenAI SDK, Google Generative AI |
-| **Text-to-Speech** | pyttsx3 |
+| **Text-to-Speech** | macOS `say` (interruptible), pyttsx3 on other systems |
 | **Configuration** | JSON (local file storage) |
 
 ## Configuration
@@ -108,9 +116,13 @@ Settings are stored in `~/.talktoai/settings.json`:
     "model": "gemini-3.6-flash",
     "api_key": "your-api-key-here"
   },
+  "speech": {
+    "engine": "whisper",
+    "model": "small.en"
+  },
   "voice": {
     "speed": 1.0,
-    "voice_name": "Alex"
+    "voice_name": ""
   },
   "response_mode": {
     "voice": true,
@@ -133,7 +145,7 @@ Settings are stored in `~/.talktoai/settings.json`:
 
 - [ ] Context awareness (clipboard, browser content)
 - [ ] Persistent conversation history
-- [ ] Custom hotkey recording UI
+- [x] Custom hotkey recording UI
 - [ ] Windows/Linux support
 - [ ] Packaged .app distribution
 - [ ] Streaming AI responses

@@ -1,307 +1,348 @@
-"""Menu Bar: System tray icon and application menu management.
+"""Menu Bar: System tray icon and popover panel.
 
-This module provides the menu bar interface for the Talk-To-AI application,
-including the system tray icon, context menu, and settings window management.
-The tray icon serves as the primary UI, displaying the application state
-(recording/idle) and providing access to settings and quit functions.
+This module provides the menu bar interface for the Talk-To-AI application.
+Clicking the tray icon opens a dark, rounded popover (in the style of modern
+macOS menu bar utilities) showing the assistant's status, the active AI model,
+quick response toggles, and Settings / Quit buttons.
 
-The menu includes modern styling with hover effects and separators, providing
-a native-feeling macOS/Windows experience.
+The tray icon also reflects recording state by switching between the muted and
+unmuted microphone images.
 
 Author: Allen Wu
-Version: 1.0.0
+Version: 1.1.0
 """
 
-import os
 import sys
 import logging
 from typing import Optional
-from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QMainWindow
-from PyQt6.QtGui import QIcon, QCursor
-from PyQt6.QtCore import Qt
+
+from PyQt6.QtCore import QObject, QPoint, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QCursor, QGuiApplication
+from PyQt6.QtWidgets import (
+    QHBoxLayout, QLabel, QPushButton, QSystemTrayIcon, QVBoxLayout, QWidget,
+)
+
+from app.theme import COLORS, icon, icon_pixmap, tray_icon
+from app.widgets import Card, RoundedPanel, SettingRow, ToggleSwitch, format_hotkey, label
 
 logger = logging.getLogger(__name__)
 
-# Menu styling constants
-MENU_STYLESHEET: str = """
-    QMenu {
-        background-color: #ffffff;
-        color: #1a1a1a;
-        border: 1px solid #d0d0d0;
-        border-radius: 6px;
-        padding: 6px 0px;
-    }
-    
-    QMenu::item {
-        padding: 10px 20px;
-        background-color: transparent;
-        margin: 2px 4px;
-        border-radius: 4px;
-        font-size: 13px;
-    }
-    
-    QMenu::item:selected {
-        background-color: #007AFF;
-        color: #ffffff;
-    }
-    
-    QMenu::item:pressed {
-        background-color: #0056b3;
-    }
-    
-    QMenu::separator {
-        height: 1px;
-        background-color: #e0e0e0;
-        margin: 4px 0px;
-    }
-"""
+POPOVER_WIDTH: int = 300
+POPOVER_GAP: int = 6  # space between the menu bar and the popover
+RECORDING_ICON: str = "unmuted_microphone.png"
+
+
+def _bool_setting(value, default: bool = True) -> bool:
+    return default if value is None else bool(value)
+
+
+class _UiBridge(QObject):
+    """Moves calls from background threads onto the Qt main thread."""
+
+    icon_requested = pyqtSignal(str)
+    speaking_requested = pyqtSignal(bool)
+
+
+class StatusDot(QLabel):
+    """Small colored dot showing idle (green) or listening (orange) state."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFixedSize(8, 8)
+        self.set_color(COLORS["green"])
+
+    def set_color(self, color: str) -> None:
+        self.setStyleSheet(f"background: {color}; border-radius: 4px;")
+
+
+class TrayPopover(RoundedPanel):
+    """The panel that drops down from the menu bar icon."""
+
+    def __init__(self, menu_bar: "MenuBar") -> None:
+        super().__init__(Qt.WindowType.Popup)
+        self.menu_bar = menu_bar
+        self.config = menu_bar.config
+        self.setFixedWidth(POPOVER_WIDTH)
+        self._syncing: bool = False
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 16, 14, 14)
+        layout.setSpacing(10)
+
+        # ---- Brand header
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        badge = QLabel()
+        badge.setPixmap(icon_pixmap("mic", "#ffffff", 16))
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setFixedSize(30, 30)
+        badge.setStyleSheet(f"background: {COLORS['accent']}; border-radius: 9px;")
+        header.addWidget(badge)
+        header.addWidget(label("Talk-To-AI", "rowTitle"), 1)
+        self.provider_chip = label("", "chip")
+        header.addWidget(self.provider_chip)
+        layout.addLayout(header)
+
+        # ---- Status card
+        status_card = Card()
+        status = QWidget()
+        status_layout = QHBoxLayout(status)
+        status_layout.setContentsMargins(14, 12, 14, 12)
+        status_layout.setSpacing(10)
+        self.status_dot = StatusDot()
+        status_layout.addWidget(self.status_dot)
+        text = QVBoxLayout()
+        text.setSpacing(2)
+        self.status_title = label("Ready", "rowTitle")
+        self.status_hint = label("", "rowHint")
+        text.addWidget(self.status_title)
+        text.addWidget(self.status_hint)
+        status_layout.addLayout(text, 1)
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setIcon(icon("stop", COLORS["text"], 11))
+        self.stop_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.stop_button.clicked.connect(self._stop_speaking)
+        self.stop_button.hide()
+        status_layout.addWidget(self.stop_button)
+        status_card.add_row(status)
+        layout.addWidget(status_card)
+
+        # ---- Response toggles
+        layout.addSpacing(2)
+        layout.addWidget(label("RESPONSES", "section"))
+        toggles = Card()
+        self.voice_toggle = ToggleSwitch()
+        self.popup_toggle = ToggleSwitch()
+        self.voice_toggle.toggled.connect(lambda on: self._save_toggle("voice", on))
+        self.popup_toggle.toggled.connect(lambda on: self._save_toggle("popup", on))
+        toggles.add_row(SettingRow("Speak answers", control=self.voice_toggle, icon_name="wave"))
+        toggles.add_row(SettingRow("Show answer window", control=self.popup_toggle,
+                                   icon_name="bubble"))
+        layout.addWidget(toggles)
+
+        # ---- Clear history
+        clear = QPushButton("  Clear conversation")
+        clear.setIcon(icon("trash", COLORS["text_secondary"], 14))
+        clear.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear.clicked.connect(self._clear_history)
+        self.clear_button = clear
+        layout.addWidget(clear)
+
+        # ---- Footer: Settings | Quit
+        layout.addSpacing(4)
+        footer = QHBoxLayout()
+        footer.setSpacing(10)
+        for text_, icon_name, slot in (
+            ("  Settings", "gear", self._open_settings),
+            ("  Quit", "power", menu_bar.quit_app),
+        ):
+            button = QPushButton(text_)
+            button.setProperty("variant", "outline")
+            button.setIcon(icon(icon_name, COLORS["text_secondary"], 15))
+            button.setIconSize(QSize(15, 15))
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(slot)
+            footer.addWidget(button)
+        layout.addLayout(footer)
+
+    # ---------------------------------------------------------------- state
+
+    def refresh(self) -> None:
+        """Pull the latest settings into the popover before it opens."""
+        self._syncing = True
+        provider = self.config.get("api", "provider") or ""
+        model = self.config.get("api", "model") or ""
+        self.provider_chip.setText(provider or "No AI set")
+        self.provider_chip.setToolTip(model)
+        self.voice_toggle.setChecked(_bool_setting(self.config.get("response_mode", "voice")))
+        self.popup_toggle.setChecked(_bool_setting(self.config.get("response_mode", "popup")))
+        self._syncing = False
+        self.set_recording(self.menu_bar.is_recording)
+
+    def set_recording(self, recording: bool) -> None:
+        start = format_hotkey(self.config.get("hotkeys", "start") or "")
+        stop = format_hotkey(self.config.get("hotkeys", "stop") or "")
+        speaking = self.menu_bar.is_speaking and not recording
+        self.stop_button.setVisible(speaking)
+        if speaking:
+            self.status_dot.set_color(COLORS["accent"])
+            self.status_title.setText("Speaking…")
+            self.status_hint.setText(f"Press {stop} to stop")
+        elif recording:
+            self.status_dot.set_color(COLORS["orange"])
+            self.status_title.setText("Listening…")
+            self.status_hint.setText(f"Press {stop} to send")
+        elif not self.config.get("api", "api_key"):
+            self.status_dot.set_color(COLORS["text_tertiary"])
+            self.status_title.setText("Add an API key to start")
+            self.status_hint.setText("Open Settings → AI Model")
+        else:
+            self.status_dot.set_color(COLORS["green"])
+            self.status_title.setText("Ready")
+            self.status_hint.setText(f"Press {start} to ask anything")
+
+    def _stop_speaking(self) -> None:
+        if callable(self.menu_bar.on_stop_speaking):
+            self.menu_bar.on_stop_speaking()
+
+    def _save_toggle(self, key: str, on: bool) -> None:
+        if self._syncing:
+            return
+        self.config.set("response_mode", key, on)
+        # Keep an open settings window in sync with the popover.
+        panel = self.menu_bar.settings_panel
+        if panel is not None:
+            widget = panel.response_voice if key == "voice" else panel.response_popup
+            if widget.isChecked() != on:
+                widget.setChecked(on)
+
+    def _clear_history(self) -> None:
+        try:
+            self.menu_bar.ai_handler.clear_history()
+            self.clear_button.setText("  Conversation cleared")
+            self.clear_button.setIcon(icon("check", COLORS["green"], 14))
+        except Exception as e:
+            logger.error(f"Error clearing chat history: {e}", exc_info=True)
+            self.clear_button.setText("  Couldn't clear")
+        QTimer.singleShot(1800, self._reset_clear_button)
+
+    def _reset_clear_button(self) -> None:
+        self.clear_button.setText("  Clear conversation")
+        self.clear_button.setIcon(icon("trash", COLORS["text_secondary"], 14))
+
+    def _open_settings(self) -> None:
+        self.hide()
+        self.menu_bar.show_settings()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            self.hide()
+        else:
+            super().keyPressEvent(event)
 
 
 class MenuBar:
-    """Manages the system tray icon, context menu, and settings window.
-    
-    This class handles the primary UI for the Talk-To-AI application. The system
-    tray icon serves as the main access point, showing recording state via icon
-    changes and providing a context menu for settings and quit functions.
-    
-    The tray icon responds to clicks by displaying a context menu with styled
-    appearance. The settings window is created on-demand and cached for quick
-    reopening.
-    
+    """Manages the system tray icon, popover panel, and settings window.
+
     Attributes:
         config (ConfigManager): Configuration manager for application settings
         hotkey_listener (HotkeyListener): Hotkey listener for settings updates
         ai_handler (AIHandler): AI handler for clearing conversation history
         tray_icon (QSystemTrayIcon): System tray icon instance
-        menu (QMenu): Context menu displayed on tray icon click
+        popover (TrayPopover): Panel shown when the tray icon is clicked
         settings_window (Optional[QMainWindow]): Settings window (created on demand)
-        settings_panel (Optional[SettingsPanel]): Settings panel widget
-        
-    Features:
-    - System tray icon with recording state indication
-    - Context menu with Settings and Quit options
-    - Modern styling with hover effects
-    - On-demand settings window creation and caching
-    - Icon changing to indicate recording state
-    
+        settings_panel (Optional[SettingsPanel]): Settings window instance
+        is_recording (bool): Whether the microphone is currently recording
+
     Example:
         >>> menu_bar = MenuBar(config, hotkey_listener, ai_handler)
-        >>> # Tray icon now visible; user can click to access settings
         >>> menu_bar.change_icon("unmuted_microphone.png")  # Show recording state
-        
-    Note:
-        Requires PyQt6 and Qt runtime. Tray icon may not be visible on headless
-        or minimal desktop environments.
     """
 
-    def __init__(
-        self, 
-        config, 
-        hotkey_listener, 
-        ai_handler
-    ) -> None:
-        """Initialize the menu bar and system tray icon.
-        
-        Creates the system tray icon with the muted microphone image and sets up
-        the context menu with Settings and Quit options. Applies modern styling
-        to the menu for a polished appearance.
-        
-        Args:
-            config: ConfigManager instance providing application settings
-            hotkey_listener: HotkeyListener instance for access in settings
-            ai_handler: AIHandler instance for conversation history management
-            
-        Side Effects:
-            - Creates system tray icon and makes it visible
-            - Initializes context menu with styled appearance
-            - Logs initialization message
-            
-        Raises:
-            FileNotFoundError: If muted_microphone.png icon file not found
-            RuntimeError: If Qt platform is not available (headless environment)
-        """
+    def __init__(self, config, hotkey_listener, ai_handler) -> None:
+        """Initialize the tray icon and its popover."""
         self.config = config
         self.hotkey_listener = hotkey_listener
         self.ai_handler = ai_handler
-        self.settings_window: Optional[QMainWindow] = None
+        self.settings_window = None
         self.settings_panel = None
+        self.is_recording: bool = False
+        self.is_speaking: bool = False
+        self.on_stop_speaking = None  # set by the app
 
-        # Create system tray icon from image file
-        current_dir: str = os.path.dirname(os.path.abspath(__file__))
-        icon_path: str = os.path.join(current_dir, "..", "muted_microphone.png")
-        
-        if not os.path.exists(icon_path):
-            logger.error(f"Icon file not found: {icon_path}")
-            raise FileNotFoundError(f"Microphone icon not found at {icon_path}")
-        
-        icon: QIcon = QIcon(icon_path)
-        self.tray_icon: QSystemTrayIcon = QSystemTrayIcon(icon)
+        # Icon changes can come from the hotkey thread; route them to the UI thread.
+        self._bridge = _UiBridge()
+        self._bridge.icon_requested.connect(self._apply_icon)
+        self._bridge.speaking_requested.connect(self._apply_speaking)
 
-        # Create styled context menu
-        self.menu: QMenu = QMenu()
-        self.menu.setStyleSheet(MENU_STYLESHEET)
+        self.tray_icon: QSystemTrayIcon = QSystemTrayIcon(tray_icon(recording=False))
+        self.tray_icon.setToolTip("Talk-To-AI")
 
-        # Add Settings action
-        settings_action = self.menu.addAction("Settings")
-        settings_action.triggered.connect(self.show_settings)
+        self.popover = TrayPopover(self)
 
-        # Add separator between settings and quit
-        self.menu.addSeparator()
-
-        # Add Quit action
-        quit_action = self.menu.addAction("Quit")
-        quit_action.triggered.connect(self.quit_app)
-
-        # Connect tray icon click to show menu
         self.tray_icon.activated.connect(self.on_tray_icon_clicked)
         self.tray_icon.show()
-        
-        logger.info("System tray menu initialized")
+        logger.info("System tray popover initialized")
 
     def on_tray_icon_clicked(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        """Handle system tray icon click and show context menu.
-        
-        When the user clicks the tray icon, displays the context menu at the
-        cursor position. Uses the ActivationReason to handle different click
-        types appropriately (single click, double click, etc.).
-        
-        Args:
-            reason (QSystemTrayIcon.ActivationReason): The type of activation
-                (Trigger for single click, DoubleClick for double click, etc.)
-                
-        Side Effects:
-            - Displays context menu at cursor position if single click (Trigger)
-            - Menu positioning uses current mouse cursor position
-            
-        Note:
-            Only responds to Trigger (single click). Double clicks and other
-            activation reasons are ignored.
-        """
-        if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            # Display menu at cursor location
-            self.menu.popup(QCursor.pos())
-            logger.debug("Context menu displayed at cursor")
+        """Toggle the popover when the tray icon is clicked."""
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                      QSystemTrayIcon.ActivationReason.Context):
+            if self.popover.isVisible():
+                self.popover.hide()
+            else:
+                self.show_popover()
+
+    def show_popover(self) -> None:
+        """Open the popover just below the tray icon, kept on screen."""
+        self.popover.refresh()
+        self.popover.adjustSize()
+
+        anchor = self.tray_icon.geometry()
+        if anchor.isValid() and not anchor.isEmpty():
+            point = QPoint(anchor.center().x() - self.popover.width() // 2,
+                           anchor.bottom() + POPOVER_GAP)
+            screen = QGuiApplication.screenAt(anchor.center())
+        else:
+            cursor = QCursor.pos()
+            point = QPoint(cursor.x() - self.popover.width() // 2, cursor.y() + POPOVER_GAP)
+            screen = QGuiApplication.screenAt(cursor)
+
+        screen = screen or QGuiApplication.primaryScreen()
+        area = screen.availableGeometry()
+        x = min(max(point.x(), area.left() + 8), area.right() - self.popover.width() - 8)
+        y = min(max(point.y(), area.top() + POPOVER_GAP), area.bottom() - self.popover.height() - 8)
+        self.popover.move(x, y)
+        self.popover.show()
+        self.popover.activateWindow()
+        logger.debug("Tray popover displayed")
 
     def show_settings(self) -> None:
-        """Open or bring to front the settings window.
-        
-        Creates the settings window on first call and caches it for subsequent
-        opens. On subsequent calls, brings the existing window to the foreground.
-        This is more efficient than recreating the window each time.
-        
-        The settings window contains the SettingsPanel with all configuration
-        options (hotkeys, API settings, voice settings, response mode).
-        
-        Window Management:
-            - First call: Creates QMainWindow with SettingsPanel as central widget
-            - Subsequent calls: Brings cached window to foreground
-            - Closing settings window hides it (doesn't destroy it)
-            - Window can be reopened multiple times from tray menu
-        
-        Side Effects:
-            - Creates settings window and panel on first call (cached for reuse)
-            - Subsequent calls bring existing window to foreground
-            - Sets window geometry to reasonable defaults (100, 100, 450, 550)
-            - Stores reference to settings_window in settings_panel
-            - Logs debug message
-            
-        Raises:
-            Does not raise exceptions. Logs error if window creation fails.
-            
-        Note:
-            The settings_window is stored in self so it persists between calls.
-            The SettingsPanel stores a reference to the window so the close button
-            can hide it without closing the entire application.
-        """
+        """Open or bring to front the settings window (created once, then reused)."""
         try:
-            if self.settings_window is None:
-                logger.debug("Creating settings window")
-                
-                # Create main window container for settings panel
-                self.settings_window = QMainWindow()
-                self.settings_window.setWindowTitle("Talk-To-AI Settings")
-                self.settings_window.setGeometry(100, 100, 450, 550)
-                
-                # Create settings panel with access to config and handlers
+            if self.settings_panel is None:
                 from app.settings_panel import SettingsPanel
-                self.settings_panel = SettingsPanel(
-                    self.config, 
-                    self.hotkey_listener, 
-                    self.ai_handler
-                )
-                self.settings_window.setCentralWidget(self.settings_panel)
-                
-                # Store reference to settings_window in panel for close button
-                self.settings_panel.settings_window = self.settings_window
-                
-                logger.debug("Settings window and panel created")
-            
-            # Bring existing window to foreground
-            self.settings_window.show()
-            self.settings_window.raise_()
-            self.settings_window.activateWindow()
+                self.settings_panel = SettingsPanel(self.config, self.hotkey_listener,
+                                                    self.ai_handler)
+            self.settings_window = self.settings_panel
+            self.settings_panel.show()
+            self.settings_panel.raise_()
+            self.settings_panel.activateWindow()
             logger.debug("Settings window brought to foreground")
-            
         except Exception as e:
             logger.error(f"Error opening settings window: {e}", exc_info=True)
 
     def change_icon(self, icon_name: str) -> None:
-        """Change the system tray icon to indicate application state.
-        
-        Updates the tray icon image to show recording state (unmuted microphone)
-        or idle state (muted microphone). The icon change provides visual feedback
-        that the hotkey was successfully detected.
-        
+        """Change the tray icon to show recording state. Safe from any thread.
+
         Args:
-            icon_name (str): Filename of the icon to display (e.g.,
-                "unmuted_microphone.png", "muted_microphone.png"). File must
-                exist in the project root directory.
-                
-        Side Effects:
-            - Updates tray icon display
-            - Logs debug message with icon name
-            
-        Raises:
-            Does not raise exceptions. Logs error and returns if icon not found.
-            
-        Example:
-            >>> menu_bar.change_icon("unmuted_microphone.png")  # Recording
-            >>> menu_bar.change_icon("muted_microphone.png")    # Idle
-            
-        Note:
-            Icon file should be in project root (parent of app/ directory).
-            Supported formats: PNG, JPG, SVG (depends on Qt image plugin support).
+            icon_name: "unmuted_microphone.png" for recording, anything else
+                (e.g. "muted_microphone.png") for idle. The names are kept for
+                compatibility; the icons themselves are drawn by app.theme.
         """
+        self._bridge.icon_requested.emit(icon_name)
+
+    def _apply_icon(self, icon_name: str) -> None:
         try:
-            current_dir: str = os.path.dirname(os.path.abspath(__file__))
-            icon_path: str = os.path.join(current_dir, "..", icon_name)
-
-            if not os.path.exists(icon_path):
-                logger.error(f"Icon file not found: {icon_path}")
-                return
-
-            icon: QIcon = QIcon(icon_path)
-            self.tray_icon.setIcon(icon)
+            self.is_recording = icon_name == RECORDING_ICON
+            self.tray_icon.setIcon(tray_icon(self.is_recording))
+            self.tray_icon.setToolTip("Talk-To-AI — listening" if self.is_recording else "Talk-To-AI")
+            if self.popover.isVisible():
+                self.popover.set_recording(self.is_recording)
             logger.debug(f"Tray icon changed to: {icon_name}")
-            
         except Exception as e:
             logger.error(f"Error changing icon: {e}", exc_info=True)
 
+    def set_speaking(self, speaking: bool) -> None:
+        """Show whether an answer is being spoken. Safe from any thread."""
+        self._bridge.speaking_requested.emit(speaking)
+
+    def _apply_speaking(self, speaking: bool) -> None:
+        self.is_speaking = speaking
+        if self.popover.isVisible():
+            self.popover.set_recording(self.is_recording)
+
     def quit_app(self) -> None:
-        """Gracefully quit the application.
-        
-        Terminates the application with exit code 0 (success). Called when user
-        selects "Quit" from the context menu.
-        
-        Side Effects:
-            - Logs info message
-            - Calls sys.exit(0) which terminates the process
-            - All threads (including daemon threads) are cleaned up
-            
-        Note:
-            This is a hard exit. No cleanup code is executed. If cleanup is needed
-            before exit, consider adding signal handlers instead of calling exit
-            directly.
-        """
+        """Quit the application."""
         logger.info("Application quit initiated by user")
         sys.exit(0)
