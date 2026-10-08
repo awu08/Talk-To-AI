@@ -13,6 +13,7 @@ A macOS menu bar voice assistant that brings Claude, ChatGPT, or Gemini to your 
 - **Custom Shortcuts** — Click a shortcut in Settings and press the new combo to change it
 - **On-Device Transcription** — Whisper turns your speech into text right on your Mac (free, private, works offline), with Google as a backup
 - **Multi-AI Support** — Choose between Claude, ChatGPT, or Gemini
+- **Model Picker** — Pick a model from a list that says what each one is good at (free, fastest, deeper thinking…), or choose **Other…** to use any model ID
 - **Right-Sized Answers** — Quick questions get a sentence or two; harder ones get only as much as they need
 - **Voice Response** — Answers are read aloud with any voice installed on your Mac, at the speed you choose
 - **Interruptible** — Press `Esc`, click **Stop speaking** or **Done**, or just ask a new question to cut the voice off
@@ -28,7 +29,7 @@ A macOS menu bar voice assistant that brings Claude, ChatGPT, or Gemini to your 
 2. Open the .dmg and drag **Talk-To-AI** into **Applications**.
 3. Open it. Because the app isn't notarized by Apple, macOS blocks it the first time: go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway**.
 4. When asked, allow the **Microphone**. Then turn on Talk-To-AI under **System Settings → Privacy & Security → Accessibility** (needed for the global shortcut) and reopen the app.
-5. Click the microphone in the menu bar → **Settings → AI Model** and add your API key.
+5. Click the microphone in the menu bar → **Settings → AI Model**, pick a provider and model, and add your API key.
 
 The first question downloads the Whisper speech model once (about 500 MB for the default size; you can pick a smaller or larger one in **Settings → Voice**).
 
@@ -47,7 +48,7 @@ Click the menu bar mic for status, to turn spoken answers or the response window
 | Section | What you can change |
 |---------|---------------------|
 | **General** | Start/stop shortcuts, spoken answers, response window, Open at login, clear chat history |
-| **AI Model** | Provider (Claude, ChatGPT, Gemini), model name, API key |
+| **AI Model** | Provider (Claude, ChatGPT, Gemini), model (from a described list, or Other… for any model ID), API key |
 | **Voice** | Speech recognition (Whisper or Google), Whisper accuracy, voice, speaking speed |
 
 Changes save automatically.
@@ -106,7 +107,7 @@ pip install -r requirements.txt
 
 3. **Configure in Settings:**
    - Click the menu bar microphone → Settings
-   - Under **AI Model**, choose a provider, enter the model name and paste your API key
+   - Under **AI Model**, choose a provider, pick a model from the list (or **Other…** to type any model ID) and paste your API key
    - Optionally change shortcuts (click one under General and press your new combo) and voice settings
 
 When running from source, macOS asks for Microphone and Accessibility permission for your terminal app rather than for Talk-To-AI.
@@ -138,6 +139,7 @@ Logs are saved to `~/Library/Logs/Talk-To-AI/talk-to-ai.log`.
 - **audio_handler.py** — Microphone recording and audio checks
 - **transcriber.py** — Speech-to-text: local Whisper, with Google as backup
 - **ai_handler.py** — AI API routing (Claude, ChatGPT, Gemini) and the answer-length instructions
+- **models_catalog.py** — The models offered in Settings, with descriptions (edit this when providers release new models)
 - **voice_handler.py** — Interruptible text-to-speech
 - **settings_panel.py** — Settings window with sidebar sections (General, AI Model, Voice)
 - **response_display.py** — Floating response window with Markdown, Copy, Stop and Done
@@ -193,7 +195,7 @@ Settings are stored in `~/.talktoai/settings.json`:
 }
 ```
 
-`voice_name` is empty for the system's default voice. `speech.model` can be `base.en` (fast), `small.en` (balanced) or `medium.en` (most accurate).
+`api.model` is any model ID; Settings fills it in from the list. `voice_name` is empty for the system's default voice. `speech.model` can be `base.en` (fast), `small.en` (balanced) or `medium.en` (most accurate).
 
 ## API Recommendations
 

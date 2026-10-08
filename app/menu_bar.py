@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
+from app import models_catalog
 from app.theme import COLORS, icon, icon_pixmap, tray_icon
 from app.widgets import Card, RoundedPanel, SettingRow, ToggleSwitch, format_hotkey, label
 
@@ -153,7 +154,7 @@ class TrayPopover(RoundedPanel):
         provider = self.config.get("api", "provider") or ""
         model = self.config.get("api", "model") or ""
         self.provider_chip.setText(provider or "No AI set")
-        self.provider_chip.setToolTip(model)
+        self.provider_chip.setToolTip(models_catalog.display_name(provider, model))
         self.voice_toggle.setChecked(_bool_setting(self.config.get("response_mode", "voice")))
         self.popup_toggle.setChecked(_bool_setting(self.config.get("response_mode", "popup")))
         self._syncing = False

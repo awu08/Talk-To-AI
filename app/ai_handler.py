@@ -15,8 +15,10 @@ Version: 1.0.0
 import logging
 from typing import List, Dict, Optional, Literal
 from anthropic import Anthropic
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 import google.generativeai as genai
+
+from app import models_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -133,8 +135,13 @@ class AIHandler:
             raise ValueError("API key is required but not configured")
 
         if not model:
-            logger.error("Model not configured")
-            raise ValueError("Model is required but not configured")
+            # No model chosen yet: use the provider's recommended one
+            default = models_catalog.default_model(provider)
+            if default is None:
+                logger.error("Model not configured")
+                raise ValueError("Model is required but not configured")
+            model = default.id
+            logger.info(f"No model set; using {provider}'s default, {model}")
 
         # Add user message to conversation history
         self.conversation_history.append({"role": "user", "content": user_text})
@@ -245,11 +252,20 @@ class AIHandler:
                 else [self.conversation_history[-1]]
             )
 
-            response = client.chat.completions.create(
+            request = dict(
                 model=model,
                 messages=[{"role": "system", "content": SYSTEM_PROMPT}] + messages,
-                max_tokens=DEFAULT_MAX_TOKENS
             )
+            try:
+                # Current models take max_completion_tokens...
+                response = client.chat.completions.create(
+                    **request, max_completion_tokens=DEFAULT_MAX_TOKENS)
+            except BadRequestError as e:
+                if "max_completion_tokens" not in str(e):
+                    raise
+                # ...some older ones only know max_tokens
+                response = client.chat.completions.create(
+                    **request, max_tokens=DEFAULT_MAX_TOKENS)
 
             return response.choices[0].message.content
             

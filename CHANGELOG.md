@@ -7,6 +7,7 @@
 - **Redesigned interface**: a dark, macOS-style look across the menu bar, Settings, and response window.
 - **Menu bar dropdown**: shows whether it's ready, listening, or speaking, with quick toggles, Clear conversation, Settings, and Quit.
 - **Settings window**: sidebar with General, AI Model, and Voice sections.
+- **Model picker**: choose a model from a list for each provider, with what each is good at (free, fastest, deeper thinking…). **Other…** lets you enter any model ID. If none is chosen, the provider's recommended model is used.
 - **Record shortcuts**: click a shortcut in Settings and press the new combo.
 - **On-device speech recognition**: Whisper transcribes your speech on your Mac (free, private, offline). Choose Fast, Balanced, or Most accurate. Google remains as a backup.
 - **Right-sized answers**: quick questions get short answers; complex ones get only as much as they need.
@@ -17,6 +18,7 @@
 ### Improved
 - Voice list shows the voices actually installed on your Mac.
 - Gemini now remembers earlier questions in the conversation.
+- Works with OpenAI's newest models, which need a different answer-length setting.
 - Clear messages when something's wrong: missing API key, blocked microphone, recording too short, or speech not understood.
 - Hotkeys keep working while an answer is being spoken.
 

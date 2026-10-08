@@ -29,6 +29,7 @@ Keyboard shortcuts on your device activate the app and a chosen LLM, which then 
 - [x] UI polishing and visual improvements (dark, macOS-style redesign across every window)
 - [x] Menu bar dropdown with status, quick toggles, and Settings / Quit
 - [x] Settings window with sidebar sections (General, AI Model, Voice)
+- [x] Model picker with descriptions (free, fast, deep thinking), plus Other… for any model
 - [x] Custom hotkey recording + UI
 - [x] Floating response window with the question, formatted answer, Copy, Stop, and Done
 - [x] On-device Whisper transcription (free, offline, more accurate), Google as backup

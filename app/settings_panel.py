@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from app import app_support
+from app import app_support, models_catalog
 from app.theme import COLORS, icon
 from app.transcriber import DEFAULT_ENGINE, DEFAULT_MODEL, WHISPER_MODELS
 from app.widgets import Card, KeycapField, SettingRow, ToggleSwitch, label
@@ -49,12 +49,9 @@ SPEECH_ENGINES: list = [
 # AI provider options
 AI_PROVIDERS: list = ["", "Claude", "ChatGPT", "Gemini"]
 
-# Model-name placeholder shown for each provider
-MODEL_PLACEHOLDERS: dict = {
-    "Claude": "claude-…",
-    "ChatGPT": "gpt-…",
-    "Gemini": "gemini-…",
-}
+# Last entry in the model dropdown: lets the user type any model ID
+OTHER_MODEL: str = "__other__"
+OTHER_MODEL_LABEL: str = "Other…"
 
 # Window geometry constants
 SETTINGS_WINDOW_WIDTH: int = 760
@@ -97,7 +94,8 @@ class SettingsPanel(QMainWindow):
 
         API Widgets:
             api_provider (QComboBox): Dropdown to select AI provider
-            api_model (QLineEdit): Text field for model name
+            model_choice (QComboBox): Listed models for the provider, plus "Other…"
+            api_model (QLineEdit): Custom model ID, shown when "Other…" is picked
             api_key (QLineEdit): Password field for API key
 
         Voice Widgets:
@@ -153,6 +151,9 @@ class SettingsPanel(QMainWindow):
         self.sidebar.setCurrentRow(0)
 
         self._loading = False
+        # A provider with no saved model: save the recommended one shown in the list
+        if self._provider_value() and not self.config.get("api", "model"):
+            self.settings_change()
         logger.debug("SettingsPanel initialized successfully")
 
     # ------------------------------------------------------------------ layout
@@ -405,12 +406,31 @@ class SettingsPanel(QMainWindow):
         self.api_provider.currentTextChanged.connect(self._on_provider_changed)
         card.add_row(SettingRow("Provider", "Claude, ChatGPT or Gemini", self.api_provider))
 
-        self.api_model: QLineEdit = QLineEdit()
-        self.api_model.setText(self.config.get("api", "model") or "")
-        self.api_model.textChanged.connect(self.settings_change)
-        card.add_row(SettingRow("Model", "The model ID from your provider's docs",
-                                self.api_model, stacked=True))
+        # Model: pick from a described list, or "Other…" to type any model ID
+        self.model_choice: QComboBox = QComboBox()
+        self.model_choice.setMaxVisibleItems(12)
+        self.model_description = label("", "rowHint", wrap=True)
+        self.api_model: QLineEdit = QLineEdit()  # custom model ID, shown for "Other…"
+        self.api_model.setPlaceholderText("Model ID, e.g. gemini-3.7-flash")
+        self.model_docs = label("", "muted", wrap=True)
+        self.model_docs.setOpenExternalLinks(True)
+        self.model_docs.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+
+        model_box = QWidget()
+        model_layout = QVBoxLayout(model_box)
+        model_layout.setContentsMargins(0, 0, 0, 0)
+        model_layout.setSpacing(6)
+        model_layout.addWidget(self.model_choice)
+        model_layout.addWidget(self.model_description)
+        model_layout.addWidget(self.api_model)
+        model_layout.addWidget(self.model_docs)
+        card.add_row(SettingRow("Model", "Pick one, or choose Other… to use any model",
+                                model_box, stacked=True))
         layout.addWidget(card)
+
+        self._fill_models(self.config.get("api", "model") or "")
+        self.model_choice.currentIndexChanged.connect(self._on_model_changed)
+        self.api_model.textChanged.connect(self.settings_change)
 
         self._section(layout, "Credentials")
         card = Card()
@@ -432,16 +452,86 @@ class SettingsPanel(QMainWindow):
         layout.addWidget(card)
 
         layout.addStretch(1)
-        self._update_model_placeholder()
         return body
 
-    def _on_provider_changed(self, _text: str) -> None:
-        self._update_model_placeholder()
+    # ------------------------------------------------------------ model picker
+
+    def _fill_models(self, selected_id: str) -> None:
+        """List the current provider's models and select `selected_id`.
+
+        A listed ID selects that entry; any other non-empty ID selects
+        "Other…" with the ID filled in; an empty ID selects the provider's
+        recommended model.
+        """
+        provider = self._provider_value()
+        self.model_choice.blockSignals(True)
+        self.model_choice.clear()
+        for model in models_catalog.models_for(provider):
+            self.model_choice.addItem(f"{model.name}  ·  {model.tags}", model.id)
+        if self.model_choice.count():
+            self.model_choice.insertSeparator(self.model_choice.count())
+        self.model_choice.addItem(OTHER_MODEL_LABEL, OTHER_MODEL)
+
+        listed = models_catalog.find_model(provider, selected_id)
+        if listed:
+            self.model_choice.setCurrentIndex(self.model_choice.findData(listed.id))
+        elif selected_id:
+            self.model_choice.setCurrentIndex(self.model_choice.findData(OTHER_MODEL))
+            self.api_model.blockSignals(True)
+            self.api_model.setText(selected_id)
+            self.api_model.blockSignals(False)
+        else:
+            default = models_catalog.default_model(provider)
+            index = self.model_choice.findData(default.id) if default else -1
+            self.model_choice.setCurrentIndex(max(0, index))
+        self.model_choice.setEnabled(bool(provider))
+        self.model_choice.blockSignals(False)
+        self._update_model_details()
+
+    def _update_model_details(self) -> None:
+        """Show the selected model's description, or the custom-ID field for Other…"""
+        provider = self._provider_value()
+        is_other = self.model_choice.currentData() == OTHER_MODEL
+        self.api_model.setVisible(is_other)
+        if not provider:
+            self.model_description.setText("Choose a provider first.")
+            self.model_docs.setText("")
+            return
+        if is_other:
+            self.model_description.setText("Type the exact model ID from your provider.")
+            url = models_catalog.MODEL_DOCS.get(provider, "")
+            link = f'<a href="{url}" style="color:{COLORS["accent_hover"]};">' \
+                   f'{provider} model list</a>' if url else "your provider's docs"
+            self.model_docs.setText(f"Find model IDs in the {link}.")
+            return
+        model = models_catalog.find_model(provider, self.model_choice.currentData())
+        if model:
+            self.model_description.setText(model.description)
+            self.model_docs.setText(f"Model ID: {model.id}")
+
+    def _on_model_changed(self, _index: int) -> None:
+        self._update_model_details()
+        if self.model_choice.currentData() == OTHER_MODEL:
+            self.api_model.setFocus()
         self.settings_change()
 
-    def _update_model_placeholder(self) -> None:
+    def _model_value(self) -> str:
+        """The model ID to save: the listed model, or the typed one for Other…"""
+        if self.model_choice.currentData() == OTHER_MODEL:
+            return self.api_model.text().strip()
+        return self.model_choice.currentData() or ""
+
+    def _on_provider_changed(self, _text: str) -> None:
+        # Switching provider: keep the model if it belongs to the new provider,
+        # otherwise pick the new provider's recommended model.
+        current = self._model_value()
         provider = self._provider_value()
-        self.api_model.setPlaceholderText(MODEL_PLACEHOLDERS.get(provider, "Pick a provider first"))
+        keep = current if models_catalog.find_model(provider, current) else ""
+        self.api_model.blockSignals(True)
+        self.api_model.clear()
+        self.api_model.blockSignals(False)
+        self._fill_models(keep)
+        self.settings_change()
 
     def _provider_value(self) -> str:
         """Selected provider name, or "" when the placeholder item is selected."""
@@ -582,7 +672,7 @@ class SettingsPanel(QMainWindow):
 
             # Save API settings
             self.config.set("api", "provider", self._provider_value())
-            self.config.set("api", "model", self.api_model.text())
+            self.config.set("api", "model", self._model_value())
             self.config.set("api", "api_key", self.api_key.text())
 
             # Save voice settings (convert slider 50-200 to 0.5-2.0 multiplier)
