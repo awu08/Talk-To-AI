@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.1 — 10/8/2026
+
+### Fixed
+- The app kept reopening after Quit and couldn't be deleted. A background helper started while downloading the Whisper model was launching extra copies of the app; it now runs and exits properly.
+- Quit now always closes the app, stopping any speech first.
+- Speech problems are now written to the log (`~/Library/Logs/Talk-To-AI/talk-to-ai.log`) so they can be diagnosed.
+
 ## v1.1.0 — 10/8/2026
 
 ### New

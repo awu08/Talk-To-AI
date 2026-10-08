@@ -270,4 +270,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # Libraries we use (e.g. the Whisper model download's progress bars) start
+    # small helper processes. In the packaged app, a helper re-runs this file,
+    # which used to open a second copy of Talk-To-AI that came back after Quit.
+    # freeze_support() lets a helper do its job and exit before any UI starts.
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()

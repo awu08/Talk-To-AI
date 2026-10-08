@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from typing import Callable, List, Optional
 
@@ -221,18 +222,33 @@ class VoiceHandler:
         voice_id = find_voice(voice_name, _installed_voices()) if voice_name else None
         if voice_id:
             command += ["-v", voice_id]
-        process = subprocess.Popen(command, stdin=subprocess.PIPE, text=True)
+        logger.info(f"Speaking with: {' '.join(command)}")
+        # Errors go to a temp file (not a pipe) so stop() never waits on them
+        errors = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+        try:
+            process = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=errors,
+                                       text=True, encoding="utf-8")
+        except OSError:
+            errors.close()
+            raise
         with self._lock:
             if self._stop_count != ticket:  # stop() arrived while we were starting
                 process.kill()
+                errors.close()
                 return
             self._process = process
         try:
             try:
                 process.communicate(text)  # text via stdin: no length or quoting limits
+                stopped = self._stop_count != ticket
+                if process.returncode not in (0, None) and not stopped:
+                    errors.seek(0)
+                    logger.error(f"'say' failed (exit {process.returncode}): "
+                                 f"{errors.read().strip()[:300]}")
             except (BrokenPipeError, OSError):
                 pass  # stopped while the text was still being sent
         finally:
+            errors.close()
             with self._lock:
                 if self._process is process:
                     self._process = None

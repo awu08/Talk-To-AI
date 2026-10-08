@@ -12,6 +12,7 @@ Author: Allen Wu
 Version: 1.1.0
 """
 
+import os
 import sys
 import logging
 from typing import Optional
@@ -19,7 +20,7 @@ from typing import Optional
 from PyQt6.QtCore import QObject, QPoint, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QCursor, QGuiApplication
 from PyQt6.QtWidgets import (
-    QHBoxLayout, QLabel, QPushButton, QSystemTrayIcon, QVBoxLayout, QWidget,
+    QApplication, QHBoxLayout, QLabel, QPushButton, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
 from app import api_keys, models_catalog
@@ -348,6 +349,11 @@ class MenuBar:
             self.popover.set_recording(self.is_recording)
 
     def quit_app(self) -> None:
-        """Quit the application."""
+        """Quit the application: stop speaking, close the event loop, and exit."""
         logger.info("Application quit initiated by user")
-        sys.exit(0)
+        if callable(self.on_stop_speaking):
+            self.on_stop_speaking()
+        self.tray_icon.hide()
+        QApplication.instance().quit()
+        # If something (like a model download) is still busy, don't hang around
+        QTimer.singleShot(1500, lambda: os._exit(0))

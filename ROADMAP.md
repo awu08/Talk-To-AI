@@ -81,3 +81,4 @@ Keyboard shortcuts on your device activate the app and a chosen LLM, which then 
 - **To-Do List**: 8/30/2026
 - **MVP Completion**: 9/26/2026
 - **v1.1 (Redesign, Whisper, Mac App)**: 10/8/2026
+- **v1.1.1 (Fix app reopening after Quit)**: 10/8/2026
