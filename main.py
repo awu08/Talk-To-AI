@@ -200,11 +200,21 @@ class VoiceAssistant:
                 f"connection, API key and model name.\n\n`{str(error)[:200]}`")
 
     def _check_accessibility(self) -> None:
-        """Explain how to grant Accessibility permission if hotkeys can't work yet."""
-        if app_support.has_accessibility_permission() is False:
-            logger.warning("Accessibility permission missing; global hotkeys won't work")
-            app_support.open_privacy_settings("Privacy_Accessibility")
-            self.response_display.show_response(app_support.accessibility_message())
+        """Explain which permissions hotkeys still need (Accessibility, Input Monitoring).
+
+        macOS is also asked to list the app in each one, so the user only has
+        to turn the switch on rather than add the app by hand.
+        """
+        missing = app_support.missing_hotkey_permissions()
+        if not missing:
+            return
+        logger.warning(f"Hotkey permissions missing: {', '.join(missing)}")
+        if "Input Monitoring" in missing:
+            app_support.request_input_monitoring()
+        if "Accessibility" in missing:
+            app_support.request_accessibility()
+        app_support.open_privacy_settings(app_support.PANES[missing[0]])
+        self.response_display.show_response(app_support.hotkey_permission_message(missing))
 
     def run(self, app: QApplication) -> None:
         """Start the application and event loops.

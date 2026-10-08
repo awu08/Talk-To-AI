@@ -9,6 +9,7 @@
 - The voice stopped whenever you pressed Esc in any app. Now it only stops for a new question, the Stop button, or Done. (Turn on **Stop shortcut also stops speaking** in Settings → General to get the old behavior.)
 - The response window disappeared when you clicked another app; it now stays on screen.
 - Every time the voice stops, the log records why.
+- The app now checks **Input Monitoring** as well as Accessibility (global shortcuts need both), says exactly which is missing, and asks macOS to add Talk-To-AI to each list so you only have to flip the switch.
 
 ## v1.1.0 — 10/8/2026
 

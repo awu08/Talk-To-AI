@@ -29,7 +29,7 @@ A macOS menu bar voice assistant that brings Claude, ChatGPT, or Gemini to your 
 1. Download **Talk-To-AI-x.y.z.dmg** from the [Releases page](https://github.com/awu08/Talk-To-AI/releases) (Apple Silicon Macs, macOS 12 or newer).
 2. Open the .dmg and drag **Talk-To-AI** into **Applications**.
 3. Open it. Because the app isn't notarized by Apple, macOS blocks it the first time: go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway**.
-4. When asked, allow the **Microphone**. Then turn on Talk-To-AI under **System Settings → Privacy & Security → Accessibility** (needed for the global shortcut) and reopen the app.
+4. When asked, allow the **Microphone**. Then turn on Talk-To-AI under **System Settings → Privacy & Security → Accessibility** and **Input Monitoring** (both are needed for the global shortcut; the app tells you which is missing) and reopen the app.
 5. Click the microphone in the menu bar → **Settings → AI Model**, pick a provider and model, and add your API key.
 
 The first question downloads the Whisper speech model once (about 500 MB for the default size; you can pick a smaller or larger one in **Settings → Voice**).
@@ -112,13 +112,13 @@ pip install -r requirements.txt
    - Each provider keeps its own key. To keep a second key for the same provider (say, a work account), choose **Key → Add another key…**, name it, and paste it
    - Optionally change shortcuts (click one under General and press your new combo) and voice settings
 
-When running from source, macOS asks for Microphone and Accessibility permission for your terminal app rather than for Talk-To-AI.
+When running from source, macOS asks for Microphone, Accessibility and Input Monitoring permission for your terminal app rather than for Talk-To-AI.
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
-| The shortcut does nothing | Turn on Talk-To-AI (or your terminal, if running from source) in **System Settings → Privacy & Security → Accessibility**, then reopen the app |
+| The shortcut does nothing | Turn on Talk-To-AI (or your terminal, if running from source) in **System Settings → Privacy & Security → Accessibility** and **Input Monitoring**, then reopen the app. After rebuilding the app, turn both switches off and on again |
 | "The microphone recorded silence" | Allow it in **System Settings → Privacy & Security → Microphone**, then reopen the app |
 | "Sorry, I didn't catch that" | Wait a moment after pressing the shortcut before speaking, speak closer to the mic, or choose a larger Whisper model in **Settings → Voice** |
 | "Add your API key…" | Enter it in **Settings → AI Model** |

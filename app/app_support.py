@@ -85,23 +85,111 @@ def acquire_single_instance_lock() -> bool:
     return _lock.tryLock(200)
 
 
-# ---------------------------------------------------- accessibility check
+# --------------------------------------------------- hotkey permissions
+#
+# Global hotkeys on macOS need two permissions:
+#   - Accessibility       (Privacy & Security → Accessibility)
+#   - Input Monitoring    (Privacy & Security → Input Monitoring)
+# Both are checked here, and macOS is asked to add the app to each list so
+# the user only has to turn the switches on.
+
+_AX_PATH = "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+_IOKIT_PATH = "/System/Library/Frameworks/IOKit.framework/IOKit"
+_CF_PATH = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+_IOHID_LISTEN_EVENT = 1          # kIOHIDRequestTypeListenEvent
+_IOHID_ACCESS_GRANTED = 0        # kIOHIDAccessTypeGranted
+
+PANES = {
+    "Accessibility": "Privacy_Accessibility",
+    "Input Monitoring": "Privacy_ListenEvent",
+}
+
 
 def has_accessibility_permission() -> Optional[bool]:
-    """Whether macOS lets this process watch the keyboard (needed for hotkeys).
+    """Whether macOS lets this process control/observe input (Accessibility).
 
     Returns None when it can't be checked (not macOS, or the check failed).
     """
     if not IS_MAC:
         return None
     try:
-        services = ctypes.cdll.LoadLibrary(
-            "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
+        services = ctypes.cdll.LoadLibrary(_AX_PATH)
         services.AXIsProcessTrusted.restype = ctypes.c_bool
         return bool(services.AXIsProcessTrusted())
     except Exception as e:
         logger.debug(f"Couldn't check Accessibility permission: {e}")
         return None
+
+
+def has_input_monitoring_permission() -> Optional[bool]:
+    """Whether macOS lets this process read keystrokes from other apps (Input Monitoring).
+
+    Returns None when it can't be checked (not macOS, or macOS older than 10.15).
+    """
+    if not IS_MAC:
+        return None
+    try:
+        iokit = ctypes.cdll.LoadLibrary(_IOKIT_PATH)
+        iokit.IOHIDCheckAccess.argtypes = [ctypes.c_uint32]
+        iokit.IOHIDCheckAccess.restype = ctypes.c_uint32
+        return iokit.IOHIDCheckAccess(_IOHID_LISTEN_EVENT) == _IOHID_ACCESS_GRANTED
+    except Exception as e:
+        logger.debug(f"Couldn't check Input Monitoring permission: {e}")
+        return None
+
+
+def request_accessibility() -> None:
+    """Ask macOS to add this app to the Accessibility list (shows its own prompt once)."""
+    if not IS_MAC:
+        return
+    try:
+        cf = ctypes.cdll.LoadLibrary(_CF_PATH)
+        services = ctypes.cdll.LoadLibrary(_AX_PATH)
+        cf.CFDictionaryCreate.restype = ctypes.c_void_p
+        cf.CFDictionaryCreate.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+                                          ctypes.POINTER(ctypes.c_void_p), ctypes.c_long,
+                                          ctypes.c_void_p, ctypes.c_void_p]
+        cf.CFRelease.argtypes = [ctypes.c_void_p]
+        services.AXIsProcessTrustedWithOptions.argtypes = [ctypes.c_void_p]
+        services.AXIsProcessTrustedWithOptions.restype = ctypes.c_bool
+
+        prompt_key = ctypes.c_void_p.in_dll(services, "kAXTrustedCheckOptionPrompt")
+        true_value = ctypes.c_void_p.in_dll(cf, "kCFBooleanTrue")
+        keys = (ctypes.c_void_p * 1)(prompt_key.value)
+        values = (ctypes.c_void_p * 1)(true_value.value)
+        key_callbacks = ctypes.addressof(ctypes.c_char.in_dll(cf, "kCFTypeDictionaryKeyCallBacks"))
+        value_callbacks = ctypes.addressof(
+            ctypes.c_char.in_dll(cf, "kCFTypeDictionaryValueCallBacks"))
+        options = cf.CFDictionaryCreate(None, keys, values, 1, key_callbacks, value_callbacks)
+        try:
+            services.AXIsProcessTrustedWithOptions(options)
+        finally:
+            cf.CFRelease(options)
+    except Exception as e:
+        logger.debug(f"Couldn't request Accessibility permission: {e}")
+
+
+def request_input_monitoring() -> None:
+    """Ask macOS to add this app to the Input Monitoring list (shows its own prompt once)."""
+    if not IS_MAC:
+        return
+    try:
+        iokit = ctypes.cdll.LoadLibrary(_IOKIT_PATH)
+        iokit.IOHIDRequestAccess.argtypes = [ctypes.c_uint32]
+        iokit.IOHIDRequestAccess.restype = ctypes.c_bool
+        iokit.IOHIDRequestAccess(_IOHID_LISTEN_EVENT)
+    except Exception as e:
+        logger.debug(f"Couldn't request Input Monitoring permission: {e}")
+
+
+def missing_hotkey_permissions() -> list:
+    """Names of the hotkey permissions that are definitely not granted."""
+    missing = []
+    if has_accessibility_permission() is False:
+        missing.append("Accessibility")
+    if has_input_monitoring_permission() is False:
+        missing.append("Input Monitoring")
+    return missing
 
 
 def open_privacy_settings(pane: str = "Privacy_Accessibility") -> None:
@@ -111,11 +199,23 @@ def open_privacy_settings(pane: str = "Privacy_Accessibility") -> None:
                           f"x-apple.systempreferences:com.apple.preference.security?{pane}"])
 
 
-def accessibility_message() -> str:
+def hotkey_permission_message(missing: list) -> str:
+    """Tell the user exactly which switches to turn on."""
     who = permission_target()
+    if len(missing) == 2:
+        where = "**Accessibility** and **Input Monitoring**"
+        steps = (f"turn on **{who}** in both. I've opened Accessibility for you; after that, "
+                 f"go back to Privacy & Security and open Input Monitoring.")
+    else:
+        where = f"**{missing[0]}**"
+        steps = f"turn on **{who}** there. I've opened that page for you."
     return (f"**Hotkeys need permission.** In System Settings → Privacy & Security → "
-            f"**Accessibility**, turn on **{who}**, then quit and reopen {APP_NAME}.\n\n"
-            f"I've opened that page for you.")
+            f"{where}: {steps}\n\nThen quit and reopen {APP_NAME}.")
+
+
+def accessibility_message() -> str:
+    """Kept for compatibility: the message when only Accessibility is missing."""
+    return hotkey_permission_message(["Accessibility"])
 
 
 # ---------------------------------------------------------- open at login
