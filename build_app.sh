@@ -2,11 +2,12 @@
 # Build Talk-To-AI.app and a .dmg installer.
 #
 # Usage (from the project folder, on a Mac):
-#     bash build_app.sh
-#   (or, if your shell says "command not found: bash":  /bin/bash build_app.sh)
+#     bash build_app.sh             build into dist/
+#     bash build_app.sh --install   build, then put the app straight into /Applications
+#   (if your shell says "command not found: bash", use /bin/bash instead)
 #
 # Result:
-#     dist/Talk-To-AI.app           the app (drag it into Applications)
+#     dist/Talk-To-AI.app           the app (or /Applications/Talk-To-AI.app with --install)
 #     dist/Talk-To-AI-<version>.dmg the installer to share
 #
 # It builds for the kind of Mac you're on (Apple Silicon or Intel).
@@ -24,6 +25,15 @@ if [[ "$(uname)" != "Darwin" ]]; then
 fi
 
 APP="dist/Talk-To-AI.app"
+INSTALLED="/Applications/Talk-To-AI.app"
+
+INSTALL=false
+for arg in "$@"; do
+    case "$arg" in
+        --install) INSTALL=true ;;
+        *) echo "Unknown option: $arg (did you mean --install?)" >&2; exit 1 ;;
+    esac
+done
 
 # Find a Python 3.10+ (macOS's built-in /usr/bin/python3 is too old)
 find_python() {
@@ -97,9 +107,27 @@ mv "$STAGING/Talk-To-AI.app" "$APP"
 trap - EXIT
 rm -rf "$STAGING"
 
-echo
-echo "Done!"
-echo "  App:       $APP"
-echo "  Installer: $DMG"
-echo
-echo "Try it now with:  open \"$APP\""
+if $INSTALL; then
+    echo "==> Installing to /Applications"
+    if pgrep -x "Talk-To-AI" >/dev/null; then
+        echo "    Quitting the running Talk-To-AI"
+        pkill -x "Talk-To-AI" || true
+        sleep 1
+    fi
+    rm -rf "$INSTALLED"
+    mv "$APP" "$INSTALLED"  # a move, not a copy: no extra disk space needed
+    echo
+    echo "Done! Talk-To-AI is installed in Applications."
+    echo "  Installer: $DMG"
+    echo
+    echo "Starting it now…"
+    open "$INSTALLED"
+else
+    echo
+    echo "Done!"
+    echo "  App:       $APP"
+    echo "  Installer: $DMG"
+    echo
+    echo "Try it now with:  open \"$APP\""
+    echo "Or next time, build straight into Applications with:  bash build_app.sh --install"
+fi

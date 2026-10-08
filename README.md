@@ -39,6 +39,12 @@ bash build_app.sh
 
 This creates `dist/Talk-To-AI.app` and `dist/Talk-To-AI-<version>.dmg` for the kind of Mac you're on. It takes a few minutes.
 
+To put the app straight into Applications (replacing and restarting any older copy), use:
+
+```bash
+bash build_app.sh --install
+```
+
 To have GitHub build the .dmg for you, push a version tag. The workflow in `.github/workflows/build-macos.yml` attaches the .dmg to a new Release:
 
 ```bash
