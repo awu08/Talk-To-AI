@@ -32,9 +32,22 @@ jobs:
           name: Talk-To-AI-dmg
           path: dist/*.dmg
 
+      - name: Release notes from CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          # Take the section for this version, e.g. "## v1.1.0 — ..." up to the next "## "
+          awk -v tag="${GITHUB_REF_NAME}" '
+            /^## / { if (found) exit; if (index($0, "## " tag " ") == 1 || $0 == "## " tag) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "See CHANGELOG.md for details." > release_notes.md
+          fi
+          cat release_notes.md
+
       - name: Attach .dmg to the release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.dmg
-          generate_release_notes: true
+          body_path: release_notes.md
