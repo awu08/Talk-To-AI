@@ -19,10 +19,37 @@ A macOS desktop voice assistant that brings Claude, ChatGPT, or Gemini to your f
 - **Real-Time Settings** — Configure hotkeys, API keys, voice settings on-the-fly
 - **Privacy-First** — API keys stored locally on your machine
 
-## Quick Start
+## Install the App
+
+1. Download **Talk-To-AI-x.y.z.dmg** from the [Releases page](https://github.com/awu08/Talk-To-AI/releases) (Apple Silicon Macs, macOS 12 or newer).
+2. Open the .dmg and drag **Talk-To-AI** into **Applications**.
+3. Open it. Because the app isn't notarized by Apple, macOS blocks it the first time: go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway**.
+4. When asked, allow the **Microphone**. Then turn on Talk-To-AI under **System Settings → Privacy & Security → Accessibility** (needed for the global shortcut) and reopen the app.
+5. Click the microphone in the menu bar → **Settings → AI Model** and add your API key.
+
+The app has no Dock icon; it lives in the menu bar. Turn on **Settings → General → Open at login** to start it automatically. Logs are in `~/Library/Logs/Talk-To-AI/`.
+
+## Build the App Yourself
+
+On a Mac, from the project folder:
+
+```bash
+bash build_app.sh
+```
+
+This creates `dist/Talk-To-AI.app` and `dist/Talk-To-AI-<version>.dmg` for the kind of Mac you're on. It takes a few minutes.
+
+To have GitHub build the .dmg for you, push a version tag. The workflow in `.github/workflows/build-macos.yml` attaches the .dmg to a new Release:
+
+```bash
+git tag v1.1.0
+git push origin v1.1.0
+```
+
+## Run From Source
 
 ### Prerequisites
-- macOS 10.13+
+- macOS 12+
 - Python 3.13+
 - API key from Claude, OpenAI, or Google Gemini (free tier available)
 
@@ -88,6 +115,13 @@ The first launch downloads the Whisper speech model once (about 500 MB for the d
 - **response_display.py** — Floating response panel with Markdown, Copy and Done
 - **theme.py** — Shared dark theme: colors, fonts, icons and stylesheet
 - **widgets.py** — Reusable UI pieces (toggle switch, cards, setting rows, keycaps)
+- **app_support.py** — App plumbing: log file, single instance, permission checks, Open at login
+
+### Packaging
+- **build_app.sh** — Builds `Talk-To-AI.app` and the `.dmg`
+- **packaging/Talk-To-AI.spec** — PyInstaller recipe (bundled libraries, menu-bar-only, microphone permission text)
+- **packaging/make_icon.py** — Draws the app icon
+- **.github/workflows/build-macos.yml** — Builds the `.dmg` on GitHub for tagged releases
 
 ## Technology Stack
 
@@ -147,7 +181,7 @@ Settings are stored in `~/.talktoai/settings.json`:
 - [ ] Persistent conversation history
 - [x] Custom hotkey recording UI
 - [ ] Windows/Linux support
-- [ ] Packaged .app distribution
+- [x] Packaged .app distribution
 - [ ] Streaming AI responses
 
 ## What I Learned

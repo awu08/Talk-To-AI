@@ -17,6 +17,7 @@ from typing import Optional, Tuple
 import numpy as np
 import sounddevice as sd
 
+from app.app_support import permission_target
 from app.transcriber import Transcriber, TranscriptionError
 
 logger = logging.getLogger(__name__)
@@ -29,8 +30,8 @@ MIN_DURATION_SECONDS: float = 0.4  # shorter clips can't hold a question
 SILENCE_PEAK: int = 60  # peak below this = mic blocked or muted
 TARGET_PEAK: int = 16000  # quiet recordings are boosted up to this level
 
-MIC_PERMISSION_HINT: str = ("Allow microphone access for your terminal in System Settings → "
-                            "Privacy & Security → Microphone, then restart the app.")
+MIC_PERMISSION_HINT: str = (f"Allow microphone access for {permission_target()} in System "
+                            "Settings → Privacy & Security → Microphone, then restart the app.")
 
 
 class AudioHandler:

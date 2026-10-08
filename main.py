@@ -13,7 +13,8 @@ import sys
 import logging
 import threading
 from typing import Optional
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from app.config import ConfigManager
 from app.menu_bar import MenuBar
@@ -24,6 +25,7 @@ from app.voice_handler import VoiceHandler
 from app.response_display import ResponseDisplay
 from app.settings_panel import SettingsPanel
 from app.theme import apply_theme
+from app import app_support
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +191,13 @@ class VoiceAssistant:
         return (f"Couldn't get an answer from {provider}. Check your internet "
                 f"connection, API key and model name.\n\n`{str(error)[:200]}`")
 
+    def _check_accessibility(self) -> None:
+        """Explain how to grant Accessibility permission if hotkeys can't work yet."""
+        if app_support.has_accessibility_permission() is False:
+            logger.warning("Accessibility permission missing; global hotkeys won't work")
+            app_support.open_privacy_settings("Privacy_Accessibility")
+            self.response_display.show_response(app_support.accessibility_message())
+
     def run(self, app: QApplication) -> None:
         """Start the application and event loops.
         
@@ -216,6 +225,9 @@ class VoiceAssistant:
             self.menu_bar.hotkey_listener = self.hotkey_listener
             self.settings_panel.hotkey_listener = self.hotkey_listener
 
+            # Global hotkeys silently do nothing without Accessibility permission
+            QTimer.singleShot(1500, self._check_accessibility)
+
             logger.info("Talk-To-AI application started")
             
             # Start Qt event loop (blocks until app closes)
@@ -235,11 +247,21 @@ def main() -> None:
     Raises:
         Exception: Any uncaught exceptions during initialization or runtime
     """
+    app_support.setup_logging()
     try:
         app: QApplication = QApplication(sys.argv)
         app.setApplicationName("Talk-To-AI")
         app.setQuitOnLastWindowClosed(False)  # menu bar app: keep running with no windows
         apply_theme(app)
+
+        # Only one copy at a time (two would fight over hotkeys and the mic)
+        if not app_support.acquire_single_instance_lock():
+            logger.info("Talk-To-AI is already running; exiting this copy")
+            QMessageBox.information(
+                None, "Talk-To-AI",
+                "Talk-To-AI is already running. Look for the microphone in the menu bar.")
+            return
+
         assistant: VoiceAssistant = VoiceAssistant()
         assistant.run(app)
     except Exception as e:

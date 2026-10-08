@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from app import app_support
 from app.theme import COLORS, icon
 from app.transcriber import DEFAULT_ENGINE, DEFAULT_MODEL, WHISPER_MODELS
 from app.widgets import Card, KeycapField, SettingRow, ToggleSwitch, label
@@ -57,7 +58,7 @@ MODEL_PLACEHOLDERS: dict = {
 
 # Window geometry constants
 SETTINGS_WINDOW_WIDTH: int = 760
-SETTINGS_WINDOW_HEIGHT: int = 600
+SETTINGS_WINDOW_HEIGHT: int = 690
 SETTINGS_WINDOW_X: int = 100
 SETTINGS_WINDOW_Y: int = 100
 SIDEBAR_WIDTH: int = 210
@@ -336,6 +337,21 @@ class SettingsPanel(QMainWindow):
                                 self.response_popup))
         layout.addWidget(card)
 
+        # ===== APP SECTION =====
+        self._section(layout, "App")
+        card = Card()
+        self.open_at_login: ToggleSwitch = ToggleSwitch()
+        supported = app_support.login_item_supported()
+        self.open_at_login.setChecked(supported and app_support.is_login_item_enabled())
+        self.open_at_login.setEnabled(supported)
+        self.open_at_login.toggled.connect(self._on_open_at_login)
+        card.add_row(SettingRow(
+            "Open at login",
+            "Start Talk-To-AI automatically when you log in" if supported
+            else "Available when running the Talk-To-AI app (not from Terminal)",
+            self.open_at_login))
+        layout.addWidget(card)
+
         # ===== CLEAR HISTORY SECTION =====
         self._section(layout, "Conversation")
         card = Card()
@@ -523,6 +539,10 @@ class SettingsPanel(QMainWindow):
 
         layout.addStretch(1)
         return body
+
+    def _on_open_at_login(self, enabled: bool) -> None:
+        if not app_support.set_login_item(enabled):
+            self.open_at_login.setChecked(app_support.is_login_item_enabled())
 
     def _on_engine_changed(self, *_args, update: bool = True) -> None:
         """Whisper size only matters when Whisper is the engine."""
