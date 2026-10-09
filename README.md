@@ -3,7 +3,7 @@
 A macOS menu bar voice assistant that brings Claude, ChatGPT, or Gemini to your fingertips with a single keyboard shortcut. Ask a question out loud from any app, and get the answer spoken back and shown in a small window.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Python](https://img.shields.io/badge/python-3.13%2B-blue.svg)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
 ![Platform](https://img.shields.io/badge/macOS-12%2B-black.svg)
 ![Status](https://img.shields.io/badge/status-active-brightgreen.svg)
 
@@ -27,20 +27,51 @@ A macOS menu bar voice assistant that brings Claude, ChatGPT, or Gemini to your 
 
 ## Install the App
 
-1. Download **Talk-To-AI-x.y.z.dmg** from the [Releases page](https://github.com/awu08/Talk-To-AI/releases) (Apple Silicon Macs, macOS 12 or newer).
-2. Open the .dmg and drag **Talk-To-AI** into **Applications**.
-3. Open it. Because the app isn't notarized by Apple, macOS blocks it the first time: go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway**.
-4. When asked, allow the **Microphone**. Then turn on Talk-To-AI under **System Settings → Privacy & Security → Accessibility** and **Input Monitoring** (both are needed for the global shortcut; the app tells you which is missing) and reopen the app.
-5. Click the microphone in the menu bar → **Settings → AI Model**, pick a provider and model, and add your API key.
+1. **Download** the latest **Talk-To-AI-x.y.z.dmg** from the [Releases page](https://github.com/awu08/Talk-To-AI/releases/latest). It's built for Apple Silicon Macs (M1 or newer) on macOS 12 or newer; on an Intel Mac, [build it yourself](#build-the-app-yourself).
+2. **Install**: open the .dmg and drag **Talk-To-AI** into **Applications**.
+3. **First launch**: open Talk-To-AI from Applications. Because the app isn't notarized by Apple, macOS blocks it the first time: go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway**.
+4. **Permissions**: macOS asks for three things, and the app tells you if any is still missing:
+   - **Microphone**: click Allow when asked.
+   - **Accessibility** and **Input Monitoring** (needed for the global shortcut): in **System Settings → Privacy & Security**, turn on **Talk-To-AI** in both lists.
+   Then quit Talk-To-AI (menu bar mic → **Quit**) and open it again.
+5. **Add an AI**: click the microphone in the menu bar → **Settings → AI Model**, pick a provider and model, and paste your API key (see below).
 
-The first question downloads the Whisper speech model once (about 500 MB for the default size; you can pick a smaller or larger one in **Settings → Voice**).
+The app has no Dock icon; it lives in the menu bar. The first question downloads the Whisper speech model once (about 500 MB for the default size; you can pick a smaller or larger one in **Settings → Voice**). Turn on **Settings → General → Open at login** to start it automatically.
+
+### Get an API key
+
+Talk-To-AI uses your own API key, so you only pay the provider for what you use (or nothing, on Gemini's free tier). Pick one:
+
+- **Gemini (free tier):** https://ai.google.dev → Get API key
+- **Claude:** https://console.anthropic.com → API Keys → Create Key
+- **ChatGPT (OpenAI):** https://platform.openai.com → API keys → Create new secret key
+
+Each provider keeps its own key in Settings, so you can add more than one and switch providers anytime.
+
+### Update to a new version
+
+1. Quit Talk-To-AI (menu bar mic → **Quit**).
+2. Download the new .dmg from the [Releases page](https://github.com/awu08/Talk-To-AI/releases/latest) and drag Talk-To-AI into **Applications**, choosing **Replace**.
+3. Open it. Your settings and API keys are kept. If the shortcut stops working, macOS treats the new version as a new app: in **Privacy & Security → Accessibility** and **Input Monitoring**, turn Talk-To-AI off and back on, then reopen it.
+
+### Uninstall
+
+1. Quit Talk-To-AI (menu bar mic → **Quit**), and turn off **Open at login** in Settings if you turned it on.
+2. Drag **Talk-To-AI** from Applications to the Trash.
+3. Optional, to remove everything it saved:
+   ```bash
+   rm -rf ~/.talktoai                 # settings and API keys
+   rm -rf ~/Library/Logs/Talk-To-AI   # logs
+   rm -rf ~/.cache/huggingface/hub/models--Systran--faster-whisper-*   # Whisper model
+   ```
+4. Optional: remove Talk-To-AI from **Privacy & Security → Accessibility**, **Input Monitoring** and **Microphone** (select it and click **−**).
 
 ## Usage
 
 1. **Press your start shortcut** (default: `⌘ ⌥ Space`) — the menu bar mic turns orange
 2. **Ask your question**
 3. **Press your stop shortcut** (default: `Esc`) — the response window shows "Thinking…"
-4. **Get the answer** — spoken aloud and shown in the response window
+4. **Get the answer** — it appears as it's written and is read aloud starting with the first sentence
 5. **Stop it anytime** — press the start shortcut to ask something new, or click **Stop speaking** or **Done**. Clicking other apps or pressing `Esc` elsewhere won't cut it off (turn on **Settings → General → Stop shortcut also stops speaking** if you want `Esc` to stop it)
 
 Click the menu bar mic for status, to turn spoken answers or the response window on and off, to clear the conversation, or to open Settings.
@@ -97,10 +128,7 @@ pip install -r requirements.txt
 
 ### Setup
 
-1. **Get an API Key** (choose one):
-   - **Claude:** https://console.anthropic.com → Create API Key
-   - **Gemini (free tier):** https://ai.google.dev → Create API Key
-   - **OpenAI:** https://platform.openai.com
+1. **Get an API key** (see [Get an API key](#get-an-api-key) above).
 
 2. **Run the application:**
    ```bash
@@ -126,7 +154,8 @@ When running from source, macOS asks for Microphone, Accessibility and Input Mon
 | The voice stopped unexpectedly | The log lists every stop and why (`Speech stopped (…)`) |
 | Answers feel slow | Keep **Settings → AI Model → Thinking** on Quick, and try a model labeled **Fastest**. The log shows how long each answer took (`Timing …`) |
 | The first answer takes a long time | Whisper is downloading its model; later questions are much faster |
-| Can't find the app | It has no Dock icon; look for the microphone in the menu bar near the clock |
+| Can't find the app | It has no Dock icon; look for the microphone in the menu bar near the clock. On MacBooks with a notch, a crowded menu bar can hide it behind the notch |
+| "Talk-To-AI can't be opened" | macOS blocks unsigned apps the first time: **Privacy & Security → Open Anyway** |
 
 Logs are saved to `~/Library/Logs/Talk-To-AI/talk-to-ai.log`.
 
