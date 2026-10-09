@@ -15,6 +15,7 @@ Version: 1.1.0
 
 import logging
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -172,33 +173,68 @@ class VoiceHandler:
 
         Any speech already playing is stopped first.
         """
+        sentences: "queue.Queue[Optional[str]]" = queue.Queue()
+        sentences.put(text)
+        sentences.put(None)
+        self.speak_queue(sentences)
+
+    def speak_queue(self, sentences: "queue.Queue[Optional[str]]") -> None:
+        """Speak pieces of text from a queue as they arrive, until a None arrives.
+
+        Used for streaming answers: the first sentence is spoken as soon as it's
+        ready while the rest is still being written. Whatever has piled up
+        while a sentence was being spoken is said in one go, so there are
+        fewer pauses. Blocks until done or stopped; run it off the UI thread.
+        Any speech already playing is stopped first.
+        """
         if self.config.get("response_mode", "voice") is False:
             logger.debug("Voice response disabled in settings, skipping synthesis")
-            return
-        text = clean_for_speech(text)
-        if not text:
             return
         self.stop("starting the next answer")
         with self._lock:
             ticket = self._stop_count
-
         voice_name: str = self.config.get("voice", "voice_name") or DEFAULT_VOICE_NAME
         speed: float = self.config.get("voice", "speed") or 1.0
+
         try:
-            self._set_speaking(True)
-            if IS_MAC and not self._say_broken:
-                try:
-                    self._speak_mac(text, voice_name, speed, ticket)
-                    return
-                except OSError as e:
-                    # `say` couldn't start; use pyttsx3 from now on (not interruptible)
-                    logger.error(f"Couldn't run macOS 'say' ({e}); falling back to pyttsx3")
-                    self._say_broken = True
-            self._speak_pyttsx3(text, voice_name, speed)
+            finished = False
+            while not finished:
+                item = sentences.get()
+                if item is None or self._stop_count != ticket:
+                    break
+                batch = [item]
+                while True:  # gather anything else that's already waiting
+                    try:
+                        extra = sentences.get_nowait()
+                    except queue.Empty:
+                        break
+                    if extra is None:
+                        finished = True
+                        break
+                    batch.append(extra)
+                text = clean_for_speech(" ".join(batch))
+                if not text:
+                    continue
+                self._set_speaking(True)
+                self._speak_text(text, voice_name, speed, ticket)
+                if self._stop_count != ticket:
+                    break
         except Exception as e:
             logger.error(f"Error during text-to-speech synthesis: {e}", exc_info=True)
         finally:
             self._set_speaking(False)
+
+    def _speak_text(self, text: str, voice_name: str, speed: float, ticket: int) -> None:
+        """Say one piece of text with the best available engine."""
+        if IS_MAC and not self._say_broken:
+            try:
+                self._speak_mac(text, voice_name, speed, ticket)
+                return
+            except OSError as e:
+                # `say` couldn't start; use pyttsx3 from now on (not interruptible)
+                logger.error(f"Couldn't run macOS 'say' ({e}); falling back to pyttsx3")
+                self._say_broken = True
+        self._speak_pyttsx3(text, voice_name, speed)
 
     def stop(self, reason: str = "") -> None:
         """Stop speaking right away. Safe to call from any thread, any time.

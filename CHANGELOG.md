@@ -1,6 +1,14 @@
 # Changelog
 
-## v1.1.1 — 10/8/2026
+## v1.2.0 — 10/8/2026
+
+### New
+- **Answers stream in**: the response window fills in as the AI writes, and the voice starts speaking after the first sentence instead of waiting for the whole answer.
+- **Quick thinking**: by default, the AI is asked to think less before answering (Claude effort "low", OpenAI reasoning "low", Gemini thinking "minimal"/"low"), which makes replies come back sooner. Switch to the model's default in **Settings → AI Model → Thinking** for hard problems.
+- **Timing in the log**: each answer logs how long transcribing, the first words and the full answer took, so you can compare models.
+
+### Changed
+- Gemini now uses Google's current `google-genai` library (the old `google-generativeai` library is no longer supported by Google).
 
 ### Fixed
 - The app kept reopening after Quit and couldn't be deleted. A background helper started while downloading the Whisper model was launching extra copies of the app; it now runs and exits properly.

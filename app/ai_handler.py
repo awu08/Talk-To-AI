@@ -1,29 +1,45 @@
-"""AI Handler: Routes prompts to multiple LLM providers.
+"""AI Handler: Routes prompts to multiple LLM providers, streaming the answer.
 
-This module provides a unified interface for communicating with multiple AI providers
-(Claude, ChatGPT, Gemini). It handles API routing, maintains conversation history,
-and abstracts away provider-specific implementation details.
+This module provides a unified interface for Claude, ChatGPT and Gemini. It
+keeps the conversation history, sends the shared system prompt (which sizes
+answers to the question), and streams the answer back piece by piece so the
+app can show and speak it while the rest is still being written.
 
-The AIHandler class implements a consistent API regardless of the underlying provider,
-allowing users to switch between Claude, ChatGPT, and Gemini seamlessly through
-configuration settings.
+Speed: by default each request asks the model for "quick" thinking (low
+effort), since spoken questions rarely need deep reasoning. Settings → AI
+Model → Thinking switches back to the model's own default. If a model doesn't
+accept the quick setting (e.g. an older model entered under "Other…"), the
+request is retried without it.
 
 Author: Allen Wu
-Version: 1.0.0
+Version: 1.2.0
 """
 
 import logging
-from typing import List, Dict, Optional, Literal
+from typing import Callable, Dict, Iterator, List, Optional
+
 from anthropic import Anthropic
 from openai import BadRequestError, OpenAI
-import google.generativeai as genai
 
 from app import api_keys, models_catalog
 
 logger = logging.getLogger(__name__)
 
-# API configuration defaults
-DEFAULT_MAX_TOKENS: int = 1024
+# Upper limit on answer length. On models that think, this also covers thinking.
+DEFAULT_MAX_TOKENS: int = 2048
+
+# Settings → AI Model → Thinking
+THINKING_QUICK: str = "quick"      # low effort: fastest replies (default)
+THINKING_DEFAULT: str = "default"  # whatever the model does by default
+
+# Gemini models whose lowest thinking level is "minimal" (others start at "low").
+# From https://ai.google.dev/gemini-api/docs/thinking (October 2026)
+GEMINI_MINIMAL_THINKING = {
+    "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3-flash-preview",
+}
+
+# Words that show up in an API error when a model rejects a speed setting
+_SPEED_SETTING_WORDS = ("effort", "output_config", "reasoning", "thinking")
 
 # Sent with every request. Answers are spoken aloud, so length matters a lot:
 # quick questions get quick answers, hard ones get only as much as they need.
@@ -39,301 +55,184 @@ SUPPORTED_PROVIDERS: set = {"Claude", "ChatGPT", "Gemini"}
 
 
 class AIHandler:
-    """Unified interface for communicating with multiple AI API providers.
-    
-    This class abstracts the differences between Claude, ChatGPT, and Gemini APIs,
-    providing a consistent interface for sending prompts and maintaining conversation
-    history. It handles provider routing, error handling, and API key management.
-    
+    """Unified, streaming interface to Claude, ChatGPT and Gemini.
+
     Attributes:
-        config (ConfigManager): Configuration manager for API keys and settings
-        conversation_history (List[Dict]): Maintains conversation context across requests
-            Each entry is {"role": "user"|"assistant", "content": str}
-        PROVIDERS (set): Set of supported AI providers for validation
-        
+        config (ConfigManager): Provider, model, keys and the Thinking setting
+        conversation_history (List[Dict]): {"role": "user"|"assistant", "content": str}
+        PROVIDERS (set): Supported provider names
+
     Example:
-        >>> from app.config import ConfigManager
-        >>> config = ConfigManager()
         >>> handler = AIHandler(config)
-        >>> response = handler.send_prompt("What is 2+2?")
-        >>> print(response)
-        'The answer is 4.'
+        >>> for piece in handler.stream_prompt("What is 2+2?"):
+        ...     print(piece, end="")
+        Four.
+        >>> handler.send_prompt("And 3+3?")   # same, but waits for the whole answer
+        'Six.'
     """
 
-    # Supported providers for validation
     PROVIDERS: set = {"Claude", "ChatGPT", "Gemini"}
 
     def __init__(self, config) -> None:
-        """Initialize AI handler with configuration manager.
-        
-        Args:
-            config (ConfigManager): Configuration manager instance that provides
-                API keys, model names, and provider selection
-                
-        Raises:
-            AttributeError: If config doesn't have required get() method
-        """
         self.config = config
         self.conversation_history: List[Dict[str, str]] = []
+        self._clients: Dict[tuple, object] = {}  # reused so connections stay warm
         self._validate_config()
         logger.debug("AIHandler initialized")
 
     def _validate_config(self) -> None:
-        """Validate that required API configuration is present.
-        
-        Checks if the configured provider is supported. Logs a warning if an
-        unknown provider is selected, but does not raise an exception (validation
-        happens at send_prompt time when the provider is actually used).
-        
-        Side Effects:
-            - Logs warning if provider is not in SUPPORTED_PROVIDERS
-        """
         provider: str = self.config.get("api", "provider")
         if provider and provider not in self.PROVIDERS:
-            logger.warning(
-                f"Unknown provider '{provider}'. Supported: {self.PROVIDERS}"
-            )
+            logger.warning(f"Unknown provider '{provider}'. Supported: {self.PROVIDERS}")
 
-    def send_prompt(
-        self, 
-        user_text: str, 
-        use_history: bool = True
-    ) -> str:
-        """Send a prompt to the configured AI provider and get a response.
-        
-        Orchestrates the full request pipeline: validation → history management →
-        provider routing → response handling. Automatically maintains conversation
-        history for multi-turn interactions.
-        
-        Args:
-            user_text (str): The user's prompt/question to send to the AI
-            use_history (bool): Whether to include conversation history in the request.
-                Defaults to True. Set to False for stateless requests.
-                
-        Returns:
-            str: The AI provider's response text
-            
+    # ------------------------------------------------------------------ public
+
+    def current_model(self) -> str:
+        """The model a request would use right now (the provider default if none is set)."""
+        provider = self.config.get("api", "provider") or ""
+        model = self.config.get("api", "model") or ""
+        if not model:
+            default = models_catalog.default_model(provider)
+            model = default.id if default else ""
+        return model
+
+    def stream_prompt(self, user_text: str, use_history: bool = True) -> Iterator[str]:
+        """Send a question and yield the answer in pieces as it's written.
+
+        The question and the answer (even a partial one, if the caller stops
+        early) are added to the conversation history.
+
         Raises:
-            ValueError: If API key or model is not configured
-            ValueError: If provider is unknown or unsupported
-            
-        Side Effects:
-            - Appends user message and AI response to conversation_history
-            - Logs debug and error information
-            
-        Example:
-            >>> response = handler.send_prompt("Explain quantum computing")
-            >>> # response contains the AI's explanation
+            ValueError: If the API key or model isn't configured, or the
+                provider is unknown
+            Exception: Errors from the provider's API
         """
-        provider: str = self.config.get("api", "provider")
-        model: str = self.config.get("api", "model")
-        # The key picked for this provider in Settings (its Primary key by default)
+        provider: str = self.config.get("api", "provider") or ""
         api_key: str = api_keys.active_key(self.config, provider) if provider else ""
-
-        # Validate configuration before making API calls
         if not api_key:
             logger.error("API key not configured")
             raise ValueError("API key is required but not configured")
-
+        model = self.current_model()
         if not model:
-            # No model chosen yet: use the provider's recommended one
-            default = models_catalog.default_model(provider)
-            if default is None:
-                logger.error("Model not configured")
-                raise ValueError("Model is required but not configured")
-            model = default.id
-            logger.info(f"No model set; using {provider}'s default, {model}")
+            logger.error("Model not configured")
+            raise ValueError("Model is required but not configured")
+        if provider not in self.PROVIDERS:
+            raise ValueError(f"Unknown provider: {provider}")
 
-        # Add user message to conversation history
-        self.conversation_history.append({"role": "user", "content": user_text})
-        logger.debug(f"User prompt added to history. Total messages: {len(self.conversation_history)}")
+        question = {"role": "user", "content": user_text}
+        self.conversation_history.append(question)
+        messages = list(self.conversation_history) if use_history else [question]
+        quick = (self.config.get("api", "thinking") or THINKING_QUICK) == THINKING_QUICK
+        streamer = {"Claude": self._stream_claude, "ChatGPT": self._stream_chatgpt,
+                    "Gemini": self._stream_gemini}[provider]
 
+        pieces: List[str] = []
         try:
-            # Route request to appropriate provider based on configuration
-            if provider == "Claude":
-                response = self._send_to_claude(model, api_key, use_history)
-            elif provider == "ChatGPT":
-                response = self._send_to_chatgpt(model, api_key, use_history)
-            elif provider == "Gemini":
-                response = self._send_to_gemini(model, api_key, use_history)
-            else:
-                raise ValueError(f"Unknown provider: {provider}")
-
-            # Add AI response to conversation history
-            self.conversation_history.append({"role": "assistant", "content": response})
-            logger.debug(
-                f"Response from {provider}: {response[:50]}..." 
-                if len(response) > 50 
-                else f"Response from {provider}: {response}"
-            )
-            
-            return response
-
+            for piece in self._with_speed_fallback(
+                    lambda q: streamer(model, api_key, messages, q), quick, model):
+                if piece:
+                    pieces.append(piece)
+                    yield piece
         except Exception as e:
-            # Drop the unanswered question so the history stays user/assistant pairs
-            if self.conversation_history and self.conversation_history[-1]["role"] == "user":
-                self.conversation_history.pop()
             logger.error(f"Error communicating with {provider}: {e}", exc_info=True)
             raise
+        finally:
+            answer = "".join(pieces)
+            if answer:
+                self.conversation_history.append({"role": "assistant", "content": answer})
+            elif self.conversation_history and self.conversation_history[-1] is question:
+                self.conversation_history.pop()  # keep user/assistant pairs
+            logger.debug(f"History now has {len(self.conversation_history)} messages")
 
-    def _send_to_claude(
-        self, 
-        model: str, 
-        api_key: str, 
-        use_history: bool
-    ) -> str:
-        """Send request to Claude (Anthropic) API.
-        
-        Uses the Anthropic SDK to communicate with Claude models. Supports
-        multi-turn conversations through message history.
-        
-        Args:
-            model (str): The Claude model identifier (e.g., "claude-3-5-sonnet-20241022")
-            api_key (str): Anthropic API key for authentication
-            use_history (bool): Whether to include conversation history in the request
-            
-        Returns:
-            str: The Claude response text
-            
-        Raises:
-            Exception: If Anthropic API request fails (authentication, rate limit, etc.)
-        """
-        try:
-            client = Anthropic(api_key=api_key)
-
-            # Select message history based on use_history flag
-            messages: List[Dict[str, str]] = (
-                self.conversation_history
-                if use_history
-                else [self.conversation_history[-1]]
-            )
-
-            response = client.messages.create(
-                model=model,
-                max_tokens=DEFAULT_MAX_TOKENS,
-                system=SYSTEM_PROMPT,
-                messages=messages
-            )
-
-            return response.content[0].text
-            
-        except Exception as e:
-            logger.error(f"Claude API error: {e}", exc_info=True)
-            raise
-
-    def _send_to_chatgpt(
-        self, 
-        model: str, 
-        api_key: str, 
-        use_history: bool
-    ) -> str:
-        """Send request to ChatGPT (OpenAI) API.
-        
-        Uses the OpenAI SDK to communicate with ChatGPT models. Supports
-        multi-turn conversations through message history.
-        
-        Args:
-            model (str): The ChatGPT model identifier (e.g., "gpt-4", "gpt-3.5-turbo")
-            api_key (str): OpenAI API key for authentication
-            use_history (bool): Whether to include conversation history in the request
-            
-        Returns:
-            str: The ChatGPT response text
-            
-        Raises:
-            Exception: If OpenAI API request fails (authentication, rate limit, etc.)
-        """
-        try:
-            client = OpenAI(api_key=api_key)
-
-            # Select message history based on use_history flag
-            messages: List[Dict[str, str]] = (
-                self.conversation_history
-                if use_history
-                else [self.conversation_history[-1]]
-            )
-
-            request = dict(
-                model=model,
-                messages=[{"role": "system", "content": SYSTEM_PROMPT}] + messages,
-            )
-            try:
-                # Current models take max_completion_tokens...
-                response = client.chat.completions.create(
-                    **request, max_completion_tokens=DEFAULT_MAX_TOKENS)
-            except BadRequestError as e:
-                if "max_completion_tokens" not in str(e):
-                    raise
-                # ...some older ones only know max_tokens
-                response = client.chat.completions.create(
-                    **request, max_tokens=DEFAULT_MAX_TOKENS)
-
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            logger.error(f"OpenAI API error: {e}", exc_info=True)
-            raise
-
-    def _send_to_gemini(
-        self, 
-        model: str, 
-        api_key: str, 
-        use_history: bool
-    ) -> str:
-        """Send request to Gemini (Google) API.
-        
-        Uses the Google Generative AI SDK to communicate with Gemini models,
-        sending the conversation history (roles mapped to Gemini's "user" /
-        "model") and the shared system prompt.
-
-        Args:
-            model (str): The Gemini model identifier (e.g., "gemini-2.0-flash")
-            api_key (str): Google Generative AI API key for authentication
-            use_history (bool): If True, include previous messages for context
-
-        Returns:
-            str: The Gemini response text
-
-        Raises:
-            Exception: If Google API request fails (authentication, rate limit, etc.)
-        """
-        try:
-            genai.configure(api_key=api_key)
-            gemini_model = genai.GenerativeModel(model, system_instruction=SYSTEM_PROMPT)
-
-            # Gemini calls the assistant role "model"
-            messages: List[Dict[str, str]] = (
-                self.conversation_history
-                if use_history
-                else [self.conversation_history[-1]]
-            )
-            contents = [
-                {"role": "model" if m["role"] == "assistant" else "user",
-                 "parts": [m["content"]]}
-                for m in messages
-            ]
-            response = gemini_model.generate_content(contents)
-            return response.text
-            
-        except Exception as e:
-            logger.error(f"Gemini API error: {e}", exc_info=True)
-            raise
+    def send_prompt(self, user_text: str, use_history: bool = True) -> str:
+        """Send a question and return the whole answer (non-streaming convenience)."""
+        return "".join(self.stream_prompt(user_text, use_history))
 
     def clear_history(self) -> None:
-        """Clear the conversation history.
-        
-        Resets conversation_history to empty list, effectively starting a fresh
-        conversation with the AI. Useful when the user wants to change topics or
-        reset context.
-        
-        Side Effects:
-            - Clears conversation_history list
-            - Logs debug message indicating history was cleared
-            
-        Example:
-            >>> handler.clear_history()
-            >>> handler.send_prompt("New topic: Python")
-            >>> # This request won't reference any previous messages
-        """
+        """Forget the conversation so the next question starts fresh."""
         self.conversation_history = []
         logger.info("Conversation history cleared by user")
+
+    # ---------------------------------------------------------------- helpers
+
+    @staticmethod
+    def _with_speed_fallback(make_stream: Callable[[bool], Iterator[str]], quick: bool,
+                             model: str) -> Iterator[str]:
+        """Stream with quick thinking; if the model rejects that setting, retry without it."""
+        started = False
+        try:
+            for piece in make_stream(quick):
+                started = True
+                yield piece
+        except Exception as e:
+            if quick and not started and any(w in str(e).lower() for w in _SPEED_SETTING_WORDS):
+                logger.info(f"{model} doesn't accept the quick-thinking setting; "
+                            "retrying with its default")
+                yield from make_stream(False)
+            else:
+                raise
+
+    def _client(self, kind: str, api_key: str, factory: Callable[[], object]) -> object:
+        key = (kind, api_key)
+        if key not in self._clients:
+            self._clients = {key: factory()}  # one client at a time is plenty
+        return self._clients[key]
+
+    # -------------------------------------------------------------- providers
+
+    def _stream_claude(self, model: str, api_key: str, messages: List[Dict[str, str]],
+                       quick: bool) -> Iterator[str]:
+        """Stream from Claude. Quick = output_config.effort "low"."""
+        client = self._client("claude", api_key, lambda: Anthropic(api_key=api_key))
+        request = dict(model=model, max_tokens=DEFAULT_MAX_TOKENS, system=SYSTEM_PROMPT,
+                       messages=messages)
+        if quick:
+            request["extra_body"] = {"output_config": {"effort": "low"}}
+        with client.messages.stream(**request) as stream:
+            for text in stream.text_stream:
+                yield text
+
+    def _stream_chatgpt(self, model: str, api_key: str, messages: List[Dict[str, str]],
+                        quick: bool) -> Iterator[str]:
+        """Stream from ChatGPT. Quick = reasoning_effort "low"."""
+        client = self._client("openai", api_key, lambda: OpenAI(api_key=api_key))
+        request = dict(model=model, stream=True,
+                       messages=[{"role": "system", "content": SYSTEM_PROMPT}] + messages)
+        if quick:
+            request["reasoning_effort"] = "low"
+        try:
+            # Current models take max_completion_tokens...
+            stream = client.chat.completions.create(
+                **request, max_completion_tokens=DEFAULT_MAX_TOKENS)
+        except BadRequestError as e:
+            if "max_completion_tokens" not in str(e):
+                raise
+            # ...some older ones only know max_tokens
+            stream = client.chat.completions.create(**request, max_tokens=DEFAULT_MAX_TOKENS)
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    def _stream_gemini(self, model: str, api_key: str, messages: List[Dict[str, str]],
+                       quick: bool) -> Iterator[str]:
+        """Stream from Gemini (google-genai SDK). Quick = thinking level minimal/low."""
+        from google import genai
+        from google.genai import types
+
+        client = self._client("gemini", api_key, lambda: genai.Client(api_key=api_key))
+        contents = [
+            types.Content(role="model" if m["role"] == "assistant" else "user",
+                          parts=[types.Part(text=m["content"])])
+            for m in messages
+        ]
+        thinking = None
+        if quick:
+            level = "MINIMAL" if model in GEMINI_MINIMAL_THINKING else "LOW"
+            thinking = types.ThinkingConfig(thinking_level=level)
+        config = types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT,
+                                             thinking_config=thinking)
+        for chunk in client.models.generate_content_stream(model=model, contents=contents,
+                                                           config=config):
+            text = getattr(chunk, "text", None)
+            if text:
+                yield text

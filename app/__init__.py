@@ -10,7 +10,8 @@ Modules:
     hotkey_listener: Global keyboard hotkey detection
     audio_handler: Microphone recording and audio checks
     transcriber: Speech-to-text (local Whisper, Google as backup)
-    ai_handler: AI API routing (Claude, ChatGPT, Gemini)
+    ai_handler: AI API routing (Claude, ChatGPT, Gemini), streamed answers
+    streaming: Splits a streaming answer into speakable sentences
     voice_handler: Interruptible text-to-speech
     settings_panel: Settings window
     response_display: Floating response window
@@ -28,7 +29,7 @@ Usage:
     ai = AIHandler(config)
 """
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 __author__ = "Allen Wu"
 __all__ = [
     "ConfigManager",

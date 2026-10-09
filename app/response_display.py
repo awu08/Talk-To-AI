@@ -65,6 +65,8 @@ class ResponseDisplay(RoundedPanel):
     thinking_ready = pyqtSignal(str)
     # True while the answer is being spoken — emitted from any thread
     speaking_changed = pyqtSignal(bool)
+    # (answer so far, question text) — streaming updates, emitted from any thread
+    partial_ready = pyqtSignal(str, str)
 
     def __init__(self, config) -> None:
         """Build the panel. It stays hidden until a response is shown.
@@ -81,6 +83,7 @@ class ResponseDisplay(RoundedPanel):
         self.setFixedWidth(DEFAULT_WINDOW_WIDTH)
         self.response_ready.connect(self.show_response)
         self.thinking_ready.connect(self.show_thinking)
+        self.partial_ready.connect(self.show_partial)
         self.speaking_changed.connect(self._set_speaking)
         # Set by the app: called to stop the spoken answer
         self.on_stop_speaking = None
@@ -183,6 +186,27 @@ class ResponseDisplay(RoundedPanel):
         self.show_response("*Thinking…*", question)
         self.copy_button.hide()
 
+    def request_partial(self, text: str, question: str = "") -> None:
+        """Thread-safe: show the answer written so far (it keeps growing)."""
+        self.partial_ready.emit(text, question or "")
+
+    def show_partial(self, text: str, question: str = "") -> None:
+        """Update the answer in place while it streams in. Main thread only.
+
+        Unlike show_response(), this doesn't re-focus the window on every
+        update, so it won't keep stealing focus while you work elsewhere.
+        """
+        if self.config.get("response_mode", "popup") is False:
+            return
+        if not self.isVisible():
+            self.show_response(text, question)
+            return
+        self._plain_text = text
+        self.response_label.setMarkdown(text)
+        self._fit_height()
+        scroll = self.response_label.verticalScrollBar()
+        scroll.setValue(scroll.maximum())  # follow the newest text
+
     def request_response(self, text: str, question: str = "") -> None:
         """Thread-safe way to show a response from a background thread."""
         self.response_ready.emit(text, question or "")
@@ -213,10 +237,12 @@ class ResponseDisplay(RoundedPanel):
             self.copy_button.show()
             self._fit_height()
             self._place_top_right()
-            self.show()
-            self.raise_()
-            self.activateWindow()
-            logger.info(f"Response displayed: {text[:50]}...")
+            if not self.isVisible():
+                # Bring it up once; later updates don't steal focus from your work
+                self.show()
+                self.raise_()
+                self.activateWindow()
+            logger.debug(f"Response displayed: {text[:50]}...")
 
         except Exception as e:
             logger.error(f"Error displaying response: {e}", exc_info=True)

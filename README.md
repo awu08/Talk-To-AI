@@ -15,6 +15,7 @@ A macOS menu bar voice assistant that brings Claude, ChatGPT, or Gemini to your 
 - **Multi-AI Support** — Choose between Claude, ChatGPT, or Gemini
 - **Saved Keys per Provider** — Each provider remembers its own API key, so switching provider swaps the key; add extra named keys (like "Work") and pick which one to use
 - **Model Picker** — Pick a model from a list that says what each one is good at (free, fastest, deeper thinking…), or choose **Other…** to use any model ID
+- **Fast, Streamed Answers** — The answer appears as it's written and the voice starts after the first sentence; a "quick thinking" setting makes models reply sooner
 - **Right-Sized Answers** — Quick questions get a sentence or two; harder ones get only as much as they need
 - **Voice Response** — Answers are read aloud with any voice installed on your Mac, at the speed you choose
 - **Interruptible** — Ask a new question, or click **Stop speaking** or **Done**, to cut the voice off (it keeps talking while you use other apps)
@@ -49,7 +50,7 @@ Click the menu bar mic for status, to turn spoken answers or the response window
 | Section | What you can change |
 |---------|---------------------|
 | **General** | Start/stop shortcuts, spoken answers, response window, whether the stop shortcut also stops speaking, Open at login, clear chat history |
-| **AI Model** | Provider (Claude, ChatGPT, Gemini), model (from a described list, or Other… for any model ID), API key (one per provider, plus named extras via **Add another key…**) |
+| **AI Model** | Provider (Claude, ChatGPT, Gemini), model (from a described list, or Other… for any model ID), Thinking (quick or the model's default), API key (one per provider, plus named extras via **Add another key…**) |
 | **Voice** | Speech recognition (Whisper or Google), Whisper accuracy, voice, speaking speed |
 
 Changes save automatically.
@@ -68,8 +69,8 @@ It builds for the kind of Mac you're on and takes a few minutes. You need Python
 To have GitHub build the .dmg for you, push a version tag. The workflow in `.github/workflows/build-macos.yml` attaches the .dmg to a new Release:
 
 ```bash
-git tag v1.1.0
-git push origin v1.1.0
+git tag v1.2.0
+git push origin v1.2.0
 ```
 
 ## Run From Source
@@ -123,6 +124,7 @@ When running from source, macOS asks for Microphone, Accessibility and Input Mon
 | "Sorry, I didn't catch that" | Wait a moment after pressing the shortcut before speaking, speak closer to the mic, or choose a larger Whisper model in **Settings → Voice** |
 | "Add your API key…" | Enter it in **Settings → AI Model** |
 | The voice stopped unexpectedly | The log lists every stop and why (`Speech stopped (…)`) |
+| Answers feel slow | Keep **Settings → AI Model → Thinking** on Quick, and try a model labeled **Fastest**. The log shows how long each answer took (`Timing …`) |
 | The first answer takes a long time | Whisper is downloading its model; later questions are much faster |
 | Can't find the app | It has no Dock icon; look for the microphone in the menu bar near the clock |
 
@@ -141,7 +143,8 @@ Logs are saved to `~/Library/Logs/Talk-To-AI/talk-to-ai.log`.
 - **hotkey_listener.py** — Global keyboard hotkey detection
 - **audio_handler.py** — Microphone recording and audio checks
 - **transcriber.py** — Speech-to-text: local Whisper, with Google as backup
-- **ai_handler.py** — AI API routing (Claude, ChatGPT, Gemini) and the answer-length instructions
+- **ai_handler.py** — AI API routing (Claude, ChatGPT, Gemini), streamed answers, quick thinking and the answer-length instructions
+- **streaming.py** — Splits a streaming answer into sentences so speech can start early
 - **api_keys.py** — Saved API keys per provider (Primary plus named extras)
 - **models_catalog.py** — The models offered in Settings, with descriptions (edit this when providers release new models)
 - **voice_handler.py** — Interruptible text-to-speech
@@ -164,7 +167,7 @@ Logs are saved to `~/Library/Logs/Talk-To-AI/talk-to-ai.log`.
 | **Hotkey Detection** | pynput |
 | **Audio Capture** | sounddevice, numpy |
 | **Speech Recognition** | Whisper via faster-whisper (local), Google Speech-to-Text (backup) |
-| **AI Providers** | Anthropic SDK, OpenAI SDK, Google Generative AI |
+| **AI Providers** | Anthropic SDK, OpenAI SDK, Google Gen AI SDK (all streamed) |
 | **Text-to-Speech** | macOS `say` (interruptible), pyttsx3 on other systems |
 | **Packaging** | PyInstaller, GitHub Actions |
 | **Configuration** | JSON (local file storage) |
@@ -182,6 +185,7 @@ Settings are stored in `~/.talktoai/settings.json`:
   "api": {
     "provider": "Gemini",
     "model": "gemini-3.6-flash",
+    "thinking": "quick",
     "keys": {
       "Gemini": { "Primary": "your-gemini-key" },
       "Claude": { "Primary": "your-claude-key", "Work": "your-work-claude-key" }
@@ -205,7 +209,7 @@ Settings are stored in `~/.talktoai/settings.json`:
 }
 ```
 
-`api.model` is any model ID; Settings fills it in from the list. `api.keys` holds each provider's keys by name, `api.active_keys` says which one each provider uses (Primary if not listed), and `api.api_key` mirrors the key in use. `voice_name` is empty for the system's default voice. `speech.model` can be `base.en` (fast), `small.en` (balanced) or `medium.en` (most accurate).
+`api.thinking` is `quick` (fastest) or `default` (the model's own thinking). `api.model` is any model ID; Settings fills it in from the list. `api.keys` holds each provider's keys by name, `api.active_keys` says which one each provider uses (Primary if not listed), and `api.api_key` mirrors the key in use. `voice_name` is empty for the system's default voice. `speech.model` can be `base.en` (fast), `small.en` (balanced) or `medium.en` (most accurate).
 
 ## API Recommendations
 
@@ -227,7 +231,7 @@ This project demonstrates:
 
 - Full-stack desktop application development using PyQt6, including a custom design system
 - Cross-platform keyboard event handling with pynput at OS level
-- Async/threading patterns for responsive UI: worker threads, Qt signals, and cancelling stale work
+- Async/threading patterns for responsive UI: worker threads, Qt signals, streaming, and cancelling stale work
 - Multi-API integration with a unified interface for Claude, ChatGPT, and Gemini
 - Prompt design to control answer length and style for spoken responses
 - Audio processing and on-device machine learning (recording, level checks, local Whisper transcription)

@@ -165,7 +165,8 @@ class ConfigManager:
             "api": {
                 "provider": "",
                 "model": "",
-                "api_key": ""
+                "api_key": "",
+                "thinking": "quick"   # "quick" (fastest) or "default" (model's own)
             },
             "speech": {
                 "engine": "whisper",   # "whisper" (on this computer) or "google"

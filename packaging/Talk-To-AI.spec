@@ -37,9 +37,8 @@ hiddenimports += [
     "pyttsx3.drivers.nsss",
     "pyttsx3.drivers.dummy",
 ]
-# Gemini's Jupyter "notebook" tools pull in pandas/scipy; the app doesn't use them
-hiddenimports += collect_submodules("google.generativeai",
-                                    filter=lambda name: ".notebook" not in name)
+# Gemini (google-genai) is imported lazily, so list it explicitly
+hiddenimports += collect_submodules("google.genai")
 
 a = Analysis(  # noqa: F821
     [os.path.join(ROOT, "main.py")],
@@ -48,7 +47,7 @@ a = Analysis(  # noqa: F821
     datas=datas,
     hiddenimports=hiddenimports,
     excludes=["tkinter", "matplotlib", "IPython", "pytest", "torch",
-              "pandas", "scipy", "bs4", "lxml", "google.generativeai.notebook"],
+              "pandas", "scipy", "bs4", "lxml", "google.generativeai"],
     noarchive=False,
 )
 

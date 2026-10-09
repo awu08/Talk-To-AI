@@ -49,6 +49,12 @@ SPEECH_ENGINES: list = [
 # AI provider options
 AI_PROVIDERS: list = ["", "Claude", "ChatGPT", "Gemini"]
 
+# Settings → AI Model → Thinking: (label, stored value)
+THINKING_CHOICES: list = [
+    ("Quick (fastest answers)", "quick"),
+    ("Model's default (deeper, slower)", "default"),
+]
+
 # Last entry in the key dropdown: adds a named key
 ADD_KEY: str = "__add__"
 ADD_KEY_LABEL: str = "Add another key…"
@@ -440,6 +446,20 @@ class SettingsPanel(QMainWindow):
         model_layout.addWidget(self.model_docs)
         card.add_row(SettingRow("Model", "Pick one, or choose Other… to use any model",
                                 model_box, stacked=True))
+
+        # Thinking: quick (low effort, fastest) or the model's own default
+        self.thinking_choice: QComboBox = QComboBox()
+        for label_text, value in THINKING_CHOICES:
+            self.thinking_choice.addItem(label_text, value)
+        saved_thinking = self.config.get("api", "thinking") or THINKING_CHOICES[0][1]
+        self.thinking_choice.setCurrentIndex(max(0, self.thinking_choice.findData(saved_thinking)))
+        self.thinking_choice.setMinimumWidth(180)
+        self.thinking_choice.currentIndexChanged.connect(self.settings_change)
+        card.add_row(SettingRow(
+            "Thinking",
+            "Quick answers sooner and suits most voice questions. "
+            "Use the model's default for hard problems.",
+            self.thinking_choice))
         layout.addWidget(card)
 
         self._fill_models(self.config.get("api", "model") or "")
@@ -806,6 +826,8 @@ class SettingsPanel(QMainWindow):
                 api_keys.set_key(self.config, provider,
                                  api_keys.active_name(self.config, provider),
                                  self.api_key.text().strip())
+
+            self.config.set("api", "thinking", self.thinking_choice.currentData())
 
             # Save voice settings (convert slider 50-200 to 0.5-2.0 multiplier)
             self.config.set("voice", "speed", self.voice_speed.value() / 100)

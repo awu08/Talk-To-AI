@@ -11,7 +11,9 @@ Version: 1.0.0
 
 import sys
 import logging
+import queue
 import threading
+import time
 from typing import Optional
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -24,10 +26,14 @@ from app.ai_handler import AIHandler
 from app.voice_handler import VoiceHandler
 from app.response_display import ResponseDisplay
 from app.settings_panel import SettingsPanel
+from app.streaming import SentenceSplitter
 from app.theme import apply_theme
 from app import app_support
 
 logger = logging.getLogger(__name__)
+
+# How often the response window refreshes while an answer streams in
+PARTIAL_UPDATE_SECONDS: float = 0.08
 
 
 class VoiceAssistant:
@@ -150,18 +156,23 @@ class VoiceAssistant:
         return question_id == self._question_id
 
     def _answer(self, question_id: int) -> None:
-        """Worker thread: transcribe → ask the AI → show and speak the answer.
+        """Worker thread: transcribe → stream the AI's answer → show and speak it.
 
         Pipeline:
             1. Stop recording and transcribe (Whisper on this computer by default)
             2. Show the question with "Thinking…" (if the popup is enabled)
-            3. Send it to the selected AI provider
-            4. Show the answer, then speak it (if enabled)
+            3. Stream the answer from the selected AI provider:
+               - the response window fills in as the text arrives
+               - each finished sentence goes straight to the voice, so speaking
+                 starts after the first sentence instead of the whole answer
+            4. Log how long each step took
         Each step checks the question is still the latest one; if a new
         question was started meanwhile, this one quietly gives up.
         """
+        started = time.monotonic()
         try:
             text, error = self.audio_handler.stop_and_transcribe()
+            transcribed = time.monotonic()
             self.menu_bar.change_icon("muted_microphone.png")
             if not self._is_current(question_id):
                 return
@@ -170,21 +181,54 @@ class VoiceAssistant:
                 self.response_display.request_response(error)
                 return
             logger.info(f"Audio transcribed: {text[:50]}...")
-
             self.response_display.request_thinking(text)
+
+            # The voice speaks sentences from this queue while the answer streams in
+            sentences: "queue.Queue[Optional[str]]" = queue.Queue()
+            if self.config.get("response_mode", "voice") is not False:
+                threading.Thread(target=self.voice_handler.speak_queue, args=(sentences,),
+                                 daemon=True).start()
+
+            splitter = SentenceSplitter()
+            answer, first_words, last_update = "", None, 0.0
+            stream = self.ai_handler.stream_prompt(text)
             try:
-                ai_response: str = self.ai_handler.send_prompt(text)
+                for piece in stream:
+                    if not self._is_current(question_id):
+                        logger.info("A new question started; dropping this answer")
+                        return
+                    if first_words is None:
+                        first_words = time.monotonic()
+                    answer += piece
+                    for sentence in splitter.feed(piece):
+                        sentences.put(sentence)
+                    now = time.monotonic()
+                    if now - last_update >= PARTIAL_UPDATE_SECONDS:
+                        self.response_display.request_partial(answer, text)
+                        last_update = now
             except Exception as e:
+                sentences.put(None)  # let the voice finish what it has
                 if self._is_current(question_id):
                     self.response_display.request_response(self._ai_error_message(e), text)
                 return
-            logger.info(f"AI response received: {ai_response[:50]}...")
-            if not self._is_current(question_id):
-                return
+            finally:
+                stream.close()       # records the (possibly partial) answer in history
+                if not self._is_current(question_id) or not answer:
+                    sentences.put(None)
 
-            # Show first, so the text is on screen while it's being spoken
-            self.response_display.request_response(ai_response, text)
-            self.voice_handler.speak(ai_response)
+            rest = splitter.flush()
+            if rest:
+                sentences.put(rest)
+            sentences.put(None)
+            self.response_display.request_response(answer, text)
+
+            finished = time.monotonic()
+            logger.info(
+                f"Timing ({self.config.get('api', 'provider')} · "
+                f"{self.ai_handler.current_model()}): "
+                f"transcribing {transcribed - started:.1f}s · "
+                f"first words {(first_words or finished) - transcribed:.1f}s · "
+                f"full answer {finished - transcribed:.1f}s")
         except Exception as e:
             logger.error(f"Error processing recording: {e}", exc_info=True)
             self.menu_bar.change_icon("muted_microphone.png")

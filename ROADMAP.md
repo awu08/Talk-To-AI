@@ -43,6 +43,14 @@ Keyboard shortcuts on your device activate the app and a chosen LLM, which then 
 - [x] Open at login, single running copy, log file, permission checks
 - [x] Automatic .dmg builds on GitHub for tagged releases
 
+### v1.2 (10/8/2026)
+- [x] Streaming AI responses (start speaking after the first sentence)
+- [x] Quick-thinking setting for faster replies
+- [x] Timing for each answer in the log
+- [x] Switched Gemini to the newer `google-genai` SDK
+- [x] Fixed the app reopening after Quit; voice keeps going while you use other apps
+- [x] Checks both Accessibility and Input Monitoring for hotkeys
+
 ## In Progress
 
 - [ ] Context awareness (clipboard, browser content)
@@ -50,8 +58,6 @@ Keyboard shortcuts on your device activate the app and a chosen LLM, which then 
 ## Planned Features
 
 - [ ] Microphone picker and live input level in Settings
-- [ ] Streaming AI responses (start speaking before the full answer arrives)
-- [ ] Switch Gemini to the newer `google-genai` SDK (the current library is deprecated)
 - [ ] Store API keys in the macOS Keychain instead of settings.json
 - [ ] Apple code signing and notarization (no security warning on first launch)
 - [ ] Homebrew install (`brew install --cask talk-to-ai`)
@@ -66,7 +72,7 @@ Keyboard shortcuts on your device activate the app and a chosen LLM, which then 
 - **Hotkey Detection**: pynput (global keyboard monitoring)
 - **Audio**: sounddevice (continuous microphone stream)
 - **Speech Recognition**: Whisper via faster-whisper (on-device), Google Speech-to-Text (backup)
-- **AI Providers**: Anthropic SDK, OpenAI SDK, Google Generative AI
+- **AI Providers**: Anthropic SDK, OpenAI SDK, Google Gen AI SDK (streamed answers)
 - **Text-to-Speech**: macOS `say` (interruptible), pyttsx3 on other systems
 - **Concurrency**: Worker threads for slow work; Qt signals for UI updates
 - **Configuration**: JSON (local file storage at ~/.talktoai/)
@@ -81,4 +87,4 @@ Keyboard shortcuts on your device activate the app and a chosen LLM, which then 
 - **To-Do List**: 8/30/2026
 - **MVP Completion**: 9/26/2026
 - **v1.1 (Redesign, Whisper, Mac App)**: 10/8/2026
-- **v1.1.1 (Fix app reopening after Quit)**: 10/8/2026
+- **v1.2 (Streaming answers, quick thinking, fixes)**: 10/8/2026
